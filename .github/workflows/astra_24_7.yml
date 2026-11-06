@@ -1,0 +1,49 @@
+name: Astra 24-7 Cloud Bot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  schedule:
+    # Auto-ensure runner is active every 5 hours 50 minutes
+    - cron: '45 */5 * * *'
+
+concurrency:
+  group: astra-telegram-bot-live
+  cancel-in-progress: true
+
+jobs:
+  run-astra-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system fonts and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Astra Bot (for 5h 40m then seamlessly hand over to next run)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PORT: "7860"
+        run: |
+          timeout 20400 python -m bot.main || true
+
+      - name: Trigger seamless continuation run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh workflow run "Astra 24-7 Cloud Bot" --ref main || true

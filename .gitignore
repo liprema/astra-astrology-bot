@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/charts/*.png
+data/*.db
+data/.mplcache/

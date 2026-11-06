@@ -1,0 +1,3 @@
+"""
+Astrological package initialization.
+"""

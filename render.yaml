@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: astra-astrology-bot
+    env: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 7860
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
