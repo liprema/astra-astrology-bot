@@ -1,12 +1,13 @@
 """
 AI Tarot Orchestrator & Multi-Provider LLM Client for ARCANA ("Аркана")
-with strict pre-answer verification protocol:
-1. NEVER pulls cards or interprets blindly without first verifying with the user:
-   - WHO or WHAT the question is about (names/roles of participants, sphere: love/relationship, career/money, choice between options, general state, timeframe).
-   - MODE: Whether Arcana should draw the cards virtually and send a photo of the spread (and which spread fits best: 1-card, Triplet, Choice, Relationship "Вокзал для двоих", or Celtic Cross), OR whether the user has already drawn cards on their own physical deck and wants them interpreted.
-2. Once verified (`has_all_required_data: true`), generates the high-res spread photo (with Upright/Reversed, Bottom of Deck, Quintessence, Elemental Dignities) and delivers a deep multi-school reading:
-   - Short attribution of which Tarot school/system is used (Rider-Waite-Smith / Golden Dawn, Thoth Crowley, French/Marseille Papus/Jodorowsky, Jungian Archetypal).
-   - Explicit alternative viewpoints where schools diverge!
+with Long-Term Memory, Full-Conversation Context, and Follow-Up Dialog Continuity:
+1. Remembers the user's subject/context, previous spreads, and full dialog history in SQLite
+   so the user NEVER has to repeat who they are or what the situation is about!
+2. Distinguishes between:
+   - Drawing a NEW spread (`intent: "new_spread"`, sends new spread photo)
+   - Answering a FOLLOW-UP question about the ALREADY drawn spread (`intent: "followup_on_existing_spread"`,
+     e.g., "А почему тут выпала Башня?", "А что это значит для финансов?", "Поясни подробнее 3 позицию и Квинтэссенцию")
+     without forcing the user to repeat context or drawing random new cards unless asked!
 """
 from __future__ import annotations
 
@@ -26,40 +27,43 @@ ARCANA_SYSTEM_PROMPT = """Ты — АРКАНА (Arcana), выдающийся �
 4. Психологическое (юнгианское, архетипическое) Таро, работа с прямыми и перевёрнутыми картами, расчёт Дна колоды (скрытого мотива), Квинтэссенции (совета расклада по Хайо Банцхафу) и Элементальных достоинств (взаимодействие стихий соседних карт).
 
 ГЛАВНЫЕ ПРАВИЛА РАБОТЫ АРКАНЫ:
-1. ПРОВЕРКА ДАННЫХ ПЕРЕД РАСКЛАДОМ (ОБЯЗАТЕЛЬНО!):
-   - Перед тем как вытягивать карты или трактовать расклад, ты ОБЯЗАНА убедиться у пользователя, О КОМ или О ЧЁМ идёт речь и понятны ли все вводные:
-     • О ком или о чём вопрос (имя/роль кверента и второго человека, если вопрос об отношениях или взаимодействии; в чём суть ситуации и какой загадан срок).
-     • Вытянуть ли карты самой Аркане (виртуальный расклад: Триплет на 3 карты, На отношения «Вокзал для двоих» на 7 карт, «Выбор из двух вариантов» на 5 карт, «Кельтский крест» на 10 карт или «1 карта + Дно колоды») ИЛИ пользователь уже выложил свои живые карты и хочет их разобрать.
-   - Если пользователь просто написал «Аркана» или задал слишком общий вопрос без уточнения, о ком/о чём речь — НЕ ГАДАЙ наугад! Сразу же тепло откликнись и уточни эти детали.
+1. ДОЛГОВРЕМЕННАЯ ПАМЯТЬ И ПОНИМАНИЕ ВСЕГО ДИАЛОГА (ВАЖНЕЙШЕЕ ПРАВИЛО!):
+   - Ты помнишь ВСЮ историю переписки с пользователем, все имена участников, контекст отношений/работы и последний сделанный расклад!
+   - НИКОГДА не проси пользователя повторять то, что он уже написал в предыдущих сообщениях!
+   - Если расклад уже выложен и пользователь задаёт уточняющий вопрос («А почему на 2 позиции такая карта?», «А как ему лучше ответить?», «Расскажи подробнее про Дно колоды») — отвечай сразу по существу, опираясь на уже лежащий расклад и всю вашу беседу!
+   - Если пользователь просит сделать ещё один расклад по той же теме («А разложи ещё на перспективу через полгода», «А давай посмотрим его чувства») — ты УЖЕ знаешь, о ком речь из памяти диалога, поэтому сразу делай расклад без лишних расспросов!
 
-2. КОГДА КОНТЕКСТ ПОНЯТЕН:
-   - Ты строишь фото расклада и даёшь глубокий, точный, многослойный разбор каждой позиции, связок между картами, Дна колоды (скрытого подсознательного мотива), Квинтэссенции (итогового совета) и баланса стихий.
-
-3. ОБЯЗАТЕЛЬНОЕ УКАЗАНИЕ ШКОЛ И АЛЬТЕРНАТИВНЫХ МНЕНИЙ:
-   - В каждом блоке разбора КОРОТКО УКАЗЫВАЙ, на какую именно школу/традицию ты опираешься (например: «По классической школе Уэйта (RWS)...», «По системе Таро Тота А. Кроули...», «По Французской / Марсельской школе...», «По правилу Элементальных достоинств Золотой Зари...»).
-   - ЕСЛИ ШКОЛЫ ПРОТИВОРЕЧАТ ДРУГ ДРУГУ ИЛИ РАСХОДЯТСЯ В АКЦЕНТАХ (например: сюжетная трактовка Уэйта vs каббалистический владыка декана у Кроули vs чистая нумерология Марсельского Таро; перевёрнутое значение по Уэйту vs чтение через ослабление стихий в Золотой Заре; различие VI, VIII, XI, XIV или XX арканов), ОБЯЗАТЕЛЬНО опирайся на наиболее авторитетный канон и ОТДЕЛЬНО УКАЗЫВАЙ альтернативное мнение другой школы!
+2. ОБЯЗАТЕЛЬНОЕ УКАЗАНИЕ ШКОЛ И АЛЬТЕРНАТИВНЫХ МНЕНИЙ:
+   - В каждом блоке разбора КОРОТКО УКАЗЫВАЙ, на какую именно школу/традицию ты опираешься (Школа Уэйта RWS, Таро Тота А. Кроули, Французская / Марсельская школа, Орден Золотой Зари).
+   - ЕСЛИ ШКОЛЫ РАСХОДЯТСЯ В АКЦЕНТАХ ИЛИ ТРАКТОВКЕ (например: сюжетная трактовка Уэйта vs каббалистический владыка декана у Кроули vs нумерология Марсельского Таро; перевёрнутое значение по Уэйту vs чтение через ослабление стихий в Золотой Заре; различие VI, VIII, XI, XIV или XX арканов), ОБЯЗАТЕЛЬНО опирайся на наиболее авторитетный канон и ОТДЕЛЬНО УКАЗЫВАЙ альтернативное мнение другой школы!
 """
 
-EXTRACTION_SYSTEM_PROMPT = """Ты — аналитический модуль бота-таролога Аркана.
-Проанализируй историю диалога с пользователем и верни СТРОГО валидный JSON без лишнего текста:
+EXTRACTION_SYSTEM_PROMPT = """Ты — модуль памяти и контекста бота-таролога Аркана.
+Проанализируй СОХРАНЁННЫЙ ПРОФИЛЬ (память о кверенте и последнем раскладе) и ВСЮ ИСТОРИЮ ДИАЛОГА, чтобы пользователю НИКОГДА не приходилось повторять одно и то же!
+
+Верни СТРОГО валидный JSON:
 {
+  "intent": "new_spread" | "followup_on_existing_spread" | "need_more_info",
   "has_all_required_data": true/false,
+  "draw_new_spread": true/false,
   "spread_type": "triplet" | "relationship" | "choice" | "celtic_cross" | "single",
-  "subject_name": "О ком или о чём расклад (например: Полина — карьера / Союз Анны и Максима / Выбор проекта)",
-  "user_question": "Сформулированный вопрос пользователя",
-  "custom_cards": ["Список карт, если пользователь сам вытянул их и перечислил в сообщении"] или null,
-  "missing_info_question_ru": "Если has_all_required_data == false: быстрый, тёплый и чёткий ответ от лица Арканы, где она откликается на имя и уточняет, о ком/о чём именно вопрос, какие участники/сроки и нужно ли ей самой вытянуть карты (или пользователь напишет свои)."
+  "subject_name": "О ком или о чём речь (возьми из текущего сообщения ИЛИ из сохранённой памяти прошлых сообщений!)",
+  "user_question": "Текущий вопрос пользователя с учётом всего контекста беседы",
+  "custom_cards": ["Список карт, только если пользователь сам выложил и перечислил свои карты"] или null,
+  "missing_info_question_ru": "Заполняй ТОЛЬКО если has_all_required_data == false (когда это самое начало разговора и совсем непонятно, о чём гадать)."
 }
 
-Правила проверки:
-1. Если пользователь просто позвал «Аркана» / «Arcana» или написал односложно («погадай», «сделай расклад», «что меня ждёт?») без уточнения, о ком/о чём речь и какой вопрос -> `has_all_required_data: false`.
-2. Если пользователь чётко указал, о ком или о чём вопрос (например: «Аркана, сделай расклад триплет для меня (Анна) на перспективу работы в ближайшие 3 месяца» или «Аркана, посмотри отношения между мной и Иваном, что он чувствует» или сам перечислил выпавшие карты и вопрос) -> `has_all_required_data: true`.
-3. Подбирай `spread_type` по смыслу:
-   - Отношения двоих -> `"relationship"`
-   - Выбор между двумя вариантами -> `"choice"`
-   - Глубокий полный анализ / Кельтский крест -> `"celtic_cross"`
-   - Одна карта / карта дня / краткий совет -> `"single"`
-   - В остальных случаях (по умолчанию) -> `"triplet"`.
+КРИТИЧЕСКИЕ ПРАВИЛА ПАМЯТИ:
+1. Если в памяти УЖЕ есть предыдущий расклад и пользователь задаёт уточняющий вопрос по нему («А что значит 3 карта?», «Почему Отшельник на дне?», «Что мне делать в итоге?») ->
+   - `intent`: `"followup_on_existing_spread"`
+   - `has_all_required_data`: `true`
+   - `draw_new_spread`: `false` (не перетасовывай карты заново, отвечай по уже выложенному раскладу!)
+2. Если пользователь уже объяснял свою ситуацию в прошлых сообщениях и просит посмотреть новый вопрос или новый расклад («А посмотри ещё на финансы», «А вытяни ещё триплет на следующий месяц», «Давай сама вытяни») ->
+   - `intent`: `"new_spread"`
+   - `has_all_required_data`: `true`
+   - `draw_new_spread`: `true`
+   - подставь `subject_name` из памяти диалога, НИЧЕГО не переспрашивай!
+3. Если пользователь в первом сообщении задал вопрос, а во втором коротко ответил («Вытяни сама», «Триплет», «Меня зовут Полина, на 3 месяца») — объедини оба сообщения вместе и сразу ставь `has_all_required_data: true`, `draw_new_spread: true`!
 """
 
 
@@ -126,9 +130,14 @@ async def call_llm(
     return None
 
 
-def rule_based_extract_tarot_dialog(history_messages: List[Dict[str, str]]) -> Dict:
-    combined_user = " \n ".join(m["content"] for m in history_messages if m["role"] == "user")
-    last_msg = history_messages[-1]["content"] if history_messages else ""
+def rule_based_extract_tarot_dialog(
+    history_messages: List[Dict[str, str]],
+    saved_profile: Optional[Dict] = None,
+) -> Dict:
+    saved_profile = saved_profile or {}
+    user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
+    combined_user = " \n ".join(user_msgs)
+    last_msg = user_msgs[-1] if user_msgs else ""
 
     cleaned = re.sub(
         r"(?:привет|здравствуй(?:те)?|аркана|arcana|погадай|сделай\s+расклад|разложи\s+карты|[!?,.\s])+",
@@ -137,54 +146,75 @@ def rule_based_extract_tarot_dialog(history_messages: List[Dict[str, str]]) -> D
         flags=re.I,
     ).strip()
 
-    has_clear_topic = len(cleaned) >= 18 and bool(
-        re.search(
-            r"(работ|карьер|деньг|финанс|отношен|любов|чувств|муж|парн|девушк|жен|выбор|проект|поездк|бизнес|учеб|здоров|будущ|перспектив|месяц|год|недел|выпал[иоа]|карт[ыа]|триплет|крест|вокзал)",
-            combined_user,
-            re.I,
+    has_saved_spread = bool(saved_profile.get("last_spread"))
+    has_clear_topic = (
+        has_saved_spread
+        or len(user_msgs) >= 2
+        or (
+            len(cleaned) >= 12
+            and bool(
+                re.search(
+                    r"(работ|карьер|деньг|финанс|отношен|любов|чувств|муж|парн|девушк|жен|выбор|проект|поездк|бизнес|учеб|здоров|будущ|перспектив|месяц|год|недел|выпал[иоа]|карт[ыа]|триплет|крест|вокзал)",
+                    combined_user,
+                    re.I,
+                )
+            )
         )
     )
 
-    low = combined_user.lower()
-    if any(w in low for w in ("вокзал", "отношен", "чувств", "любит", "партнер", "партнёр", "между нами")):
+    low_last = last_msg.lower()
+    wants_new_spread = (not has_saved_spread) or bool(
+        re.search(r"(ещё\s+расклад|новый\s+расклад|вытяни|разложи|посмотри\s+ещё|триплет|крест|вокзал|выбор)", low_last)
+    )
+
+    low_all = combined_user.lower()
+    if any(w in low_all for w in ("вокзал", "отношен", "чувств", "любит", "партнер", "партнёр", "между нами")):
         spread_type = "relationship"
-    elif any(w in low for w in ("выбор", "или", "двух вариант", "стоит ли")):
+    elif any(w in low_all for w in ("выбор", "двух вариант", "стоит ли")):
         spread_type = "choice"
-    elif any(w in low for w in ("кельтск", "полный расклад", "10 карт")):
+    elif any(w in low_all for w in ("кельтск", "полный расклад", "10 карт")):
         spread_type = "celtic_cross"
-    elif any(w in low for w in ("одна карта", "1 карта", "карта дня")):
+    elif any(w in low_all for w in ("одна карта", "1 карта", "карта дня")):
         spread_type = "single"
     else:
-        spread_type = "triplet"
+        spread_type = saved_profile.get("spread_type") or "triplet"
 
     missing_prompt = (
         "🃏 **Я на связи! Это Аркана.**\n\n"
-        "Прежде чем я прикоснусь к колоде и построю расклад, мне важно точно настроиться на ваш запрос и убедиться, "
-        "**о ком или о чём именно идёт речь**.\n\n"
-        "Пожалуйста, уточните:\n"
-        "1. **О ком или о чём вопрос?** (назовите ваше имя или имена участников, сферу — отношения, работа, финансы, выбор из двух вариантов — и загаданный срок).\n"
-        "2. **Как работаем с картами?** Вытянуть ли карты мне самой (и какой расклад вы хотите: *Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт*) — или вы уже выложили карты на своей колоде и хотите их разобрать?\n\n"
-        "*Пример: «Аркана, вытяни сама триплет для Анны на перспективу новой работы в ближайшие 3 месяца».*"
+        "Напишите один раз суть вашего вопроса (я запомню весь контекст нашей беседы):\n"
+        "1. **О ком или о чём вопрос?** (имена/роли, сфера — отношения, карьера, финансы, выбор — и срок).\n"
+        "2. Вытянуть ли карты мне самой или разобрать ваш расклад?"
     )
 
     return {
+        "intent": "new_spread" if wants_new_spread else "followup_on_existing_spread",
         "has_all_required_data": has_clear_topic,
+        "draw_new_spread": wants_new_spread,
         "spread_type": spread_type,
-        "subject_name": "Запрос Кверента",
+        "subject_name": saved_profile.get("subject_name") or "Запрос Кверента",
         "user_question": last_msg,
         "custom_cards": None,
         "missing_info_question_ru": missing_prompt,
     }
 
 
-async def analyze_tarot_dialog_completeness(history_messages: List[Dict[str, str]]) -> Dict:
+async def analyze_tarot_dialog_completeness(
+    history_messages: List[Dict[str, str]],
+    saved_profile: Optional[Dict] = None,
+) -> Dict:
+    saved_profile = saved_profile or {}
     convo_text = "\n".join(
         f"{'Пользователь' if m['role'] == 'user' else 'Аркана'}: {m['content']}"
-        for m in history_messages[-8:]
+        for m in history_messages[-24:]
     )
+    profile_summary = {
+        "subject_name": saved_profile.get("subject_name"),
+        "spread_type": saved_profile.get("spread_type"),
+        "has_existing_spread": bool(saved_profile.get("last_spread")),
+    }
     raw_json = await call_llm(
         EXTRACTION_SYSTEM_PROMPT,
-        f"История диалога:\n{convo_text}\n\nВерни JSON оценки полноты данных для расклада Таро:",
+        f"ПАМЯТЬ БОТА О ТЕКУЩЕМ РАЗГОВОРЕ:\n{json.dumps(profile_summary, ensure_ascii=False)}\n\nПОЛНАЯ ИСТОРИЯ ДИАЛОГА:\n{convo_text}\n\nВерни JSON:",
         temperature=0.1,
         json_mode=True,
     )
@@ -193,11 +223,15 @@ async def analyze_tarot_dialog_completeness(history_messages: List[Dict[str, str
             cleaned = re.sub(r"^```(?:json)?|```$", "", raw_json.strip(), flags=re.M).strip()
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict) and "has_all_required_data" in parsed:
+                if not parsed.get("subject_name") and saved_profile.get("subject_name"):
+                    parsed["subject_name"] = saved_profile["subject_name"]
+                if saved_profile.get("last_spread"):
+                    parsed["has_all_required_data"] = True
                 return parsed
         except Exception:
             pass
 
-    return rule_based_extract_tarot_dialog(history_messages)
+    return rule_based_extract_tarot_dialog(history_messages, saved_profile)
 
 
 def build_offline_tarot_synthesis(spread: Dict, rag_passages: List[Dict]) -> str:
@@ -253,6 +287,7 @@ async def generate_tarot_interpretation(
     spread: Dict,
     user_question: str,
     rag_passages: List[Dict],
+    history_messages: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     spread_text = format_spread_for_llm(spread)
     rag_context = "\n\n".join(
@@ -260,19 +295,28 @@ async def generate_tarot_interpretation(
         for c in rag_passages
     )
 
+    history_block = ""
+    if history_messages and len(history_messages) > 1:
+        recent_turns = []
+        for m in history_messages[-14:-1]:
+            role_lbl = "Пользователь" if m["role"] == "user" else "Аркана"
+            recent_turns.append(f"{role_lbl}: {m['content'][:700]}")
+        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА С ПОЛЬЗОВАТЕЛЕМ (НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ ДОСЛОВНО, ПРОДОЛЖАЙ РАЗГОВОР ЕСТЕСТВЕННО):\n" + "\n".join(recent_turns) + "\n\n"
+
     prompt = (
-        f"ЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_question}\n\n"
-        f"ДАННЫЕ ВЫПАВШЕГО РАСКЛАДА ТАРО:\n{spread_text}\n\n"
+        f"{history_block}"
+        f"ТЕКУЩИЙ ВОПРОС / РЕПЛИКА ПОЛЬЗОВАТЕЛЯ:\n{user_question}\n\n"
+        f"ДАННЫЕ ВЫПАВШЕГО РАСКЛАДА ТАРО (В ПАМЯТИ АРКАНЫ):\n{spread_text}\n\n"
         f"КАНОНИЧЕСКИЕ ИСТОЧНИКИ ИЗ БАЗЫ ЗНАНИЙ ТАРО:\n{rag_context}\n\n"
         "ИНСТРУКЦИЯ ДЛЯ ОТВЕТА АРКАНЫ:\n"
-        "1. Дай глубокий, точный, профессиональный разбор каждой выпавшей карты в её позиции (с учётом того, прямая она или перевёрнутая), связок между картами, Дна колоды (скрытого мотива), Квинтэссенции (совета расклада) и баланса стихий.\n"
+        "1. Дай глубокий, точный, профессиональный ответ на текущий вопрос пользователя, опираясь на выпавшие карты, Дно колоды, Квинтэссенцию, баланс стихий и весь предыдущий контекст разговора.\n"
         "2. В каждом блоке КОРОТКО УКАЗЫВАЙ, на какую именно школу Таро ты опираешься (Школа Уэйта RWS, Таро Тота Алистера Кроули, Марсельская / Французская школа Папюса, Орден Золотой Зари, Психологическое/Юнгианское Таро).\n"
         "3. Если между школами есть различия в трактовке аркана, декана, ранга двора или чтения перевёрнутой позиции — опирайся на наиболее авторитетный канон и ОБЯЗАТЕЛЬНО приводи вторую точку зрения как «Альтернативное мнение другой школы».\n"
         "4. Пиши живым, глубоким, уважительным и структурированным языком на русском языке."
     )
 
     llm_answer = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.4, json_mode=False)
-    if llm_answer and len(llm_answer.strip()) > 120:
+    if llm_answer and len(llm_answer.strip()) > 80:
         return llm_answer.strip()
 
     return build_offline_tarot_synthesis(spread, rag_passages)

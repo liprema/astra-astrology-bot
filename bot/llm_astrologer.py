@@ -1,13 +1,13 @@
 """
 AI Astrological Orchestrator & Multi-Provider LLM Client (Gemini / Groq / OpenRouter)
-with strict pre-answer verification protocol:
-1. NEVER answers an astrological question blindly without first verifying:
-   - WHO or WHAT the question is about (natal person, partner synastry, horary question, election, mundane event, relocation place).
-   - Exact Date (DD.MM.YYYY), Exact Time (HH:MM and whether from birth certificate, rectified, or approximate), and City/Place.
-   - For Horary questions: confirms the question essence and city where the querent is located right now.
-2. Once verified (`READY_TO_CALCULATE`), computes exact ephemeris, sends the chart photo, and provides a comprehensive synthesis:
-   - Explicitly cites the astrological direction/school used for each conclusion.
-   - Explicitly highlights alternative interpretations where schools disagree (e.g., Classical Septener vs Modern Transsaturnian rulers, Placidus vs Whole Sign houses, Horary Regiomontanus vs Western Modern).
+with Long-Term Memory, Full-Conversation Context, and Follow-Up Dialog Continuity:
+1. Remembers ALL user & subject profiles (birth date, exact time, time source, birth city, current city)
+   permanently in SQLite so the user NEVER has to repeat the same data!
+2. Understands follow-up questions naturally ("А что по деньгам?", "А если переехать в Казань?",
+   "Почему ты сказала, что Марс в 12 доме?") without re-asking for birth data or re-sending the chart photo
+   unless the user asks for a new person/place/chart.
+3. Explicitly cites the astrological direction/school used for each conclusion and highlights
+   alternative interpretations where schools disagree.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
+from bot.astro_engine import format_chart_for_llm
 from bot.config import GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
 
 ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), выдающийся профессиональный астролог-эксперт всех классических и современных направлений:
@@ -26,45 +27,42 @@ ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), выдающийся пр�
 4. Ураническая астрология (Гамбургская школа А. Витте, космобиология Р. Эбертина — мидпойнты и 8 транснептунов: Купидон, Гадес, Зевс, Кронос, Аполлон, Адмет, Вулкан, Посейдон), Гелиоцентрическая астрология, Кармическая астрология и Формула Души (цепочки диспозиторов).
 
 ГЛАВНЫЕ ПРАВИЛА РАБОТЫ АСТРЫ:
-1. ПРОВЕРКА ДАННЫХ ПЕРЕД ОТВЕТОМ (ОБЯЗАТЕЛЬНО!):
-   - Перед тем как давать астрологический прогноз или разбор карты, ты ОБЯЗАНА убедиться у пользователя, О КОМ или О ЧЁМ идёт речь и собраны ли ВСЕ необходимые исходные данные:
-     • Для натальной карты / прогноза / Формулы Души / кармического разбора: О ком речь (имя/роль), Дата рождения (ДД.ММ.ГГГГ), Точное время рождения (ЧЧ:ММ и насколько оно точное — бирка, со слов, ректификация) и Город рождения (а для соляра/релокации — также текущий город проживания).
-     • Для хорарного вопроса (вопрос «здесь и сейчас»): в чём именно суть вопроса, о ком/чём он, и в каком городе сейчас находится спрашивающий.
-     • Для синастрии (совместимости): данные обоих партнёров (дата, время, город каждого).
-     • Для мунданной карты / места / события: что за событие или место, дата, время и город/координаты.
-   - Если хотя бы части этих данных не хватает или не до конца понятно, о ком/о чём вопрос — НЕ ПРИДУМЫВАЙ и не гадай! Сразу же, вежливо, тепло и структурированно уточни недостающие детали у пользователя.
+1. ДОЛГОВРЕМЕННАЯ ПАМЯТЬ И ПОНИМАНИЕ ВСЕГО ДИАЛОГА (ВАЖНЕЙШЕЕ ПРАВИЛО!):
+   - Ты помнишь ВСЮ историю переписки с пользователем и все сохранённые анкеты (профили рождения).
+   - НИКОГДА не проси пользователя повторять дату, время или город рождения, если он уже называл их раньше в диалоге или они есть в сохранённом профиле!
+   - Если карта уже построена и пользователь задаёт уточняющий или следующий вопрос («А что по финансам?», «А когда лучше менять работу?», «Расскажи подробнее про мою Венеру», «А как это влияет на личную жизнь?») — сразу отвечай по существу, опираясь на уже рассчитанную карту и всю историю вашего разговора.
+   - Уточняй данные ТОЛЬКО тогда, когда речь идёт о новом человеке/событии, для которого ещё нет даты, времени или города.
 
-2. КОГДА ВСЕ ДАННЫЕ ПОЛУЧЕНЫ:
-   - Если пользователь уже сообщил все необходимые данные (дату, время, город и суть запроса/о ком речь) — ты запускаешь построение карты и даёшь глубокий, исчерпывающий профессиональный разбор.
-
-3. ОБЯЗАТЕЛЬНОЕ УКАЗАНИЕ ШКОЛ И АЛЬТЕРНАТИВНЫХ МНЕНИЙ:
+2. ОБЯЗАТЕЛЬНОЕ УКАЗАНИЕ ШКОЛ И АЛЬТЕРНАТИВНЫХ МНЕНИЙ:
    - В каждом разделе ответа КОРОТКО УКАЗЫВАЙ, на какое именно направление/школу и автора ты опираешься (например: «По классической западной и эллинистической школе...», «По хорарной традиции У. Лилли / Дж. Фроули...», «По современной психологической школе...», «По Формуле Души (цепочкам диспозиторов)...», «По Гамбургской уранической школе...»).
-   - ЕСЛИ ШКОЛЫ ПРОТИВОРЕЧАТ ДРУГ ДРУГУ (например: в классике управитель Скорпиона — Марс, Водолея — Сатурн, Рыб — Юпитер, а в модерне — Плутон, Уран, Нептун; или планета в Плацидусе стоит в одном доме, а в Полнознаковой эллинистической системе — в соседнем; или разница между классическим вредителем и современной трактовкой), ОБЯЗАТЕЛЬНО опирайся на более авторитетную/каноническую традицию для данной задачи и ОТДЕЛЬНО УКАЗЫВАЙ альтернативное мнение другой школы!
+   - ЕСЛИ ШКОЛЫ ПРОТИВОРЕЧАТ ДРУГ ДРУГУ (например: в классике управитель Скорпиона — Марс, Водолея — Сатурн, Рыб — Юпитер, а в модерне — Плутон, Уран, Нептун; или планета в Плацидусе стоит в одном доме, а в Полнознаковой эллинистической системе — в соседнем), ОБЯЗАТЕЛЬНО опирайся на более авторитетную/каноническую традицию для данной задачи и ОТДЕЛЬНО УКАЗЫВАЙ альтернативное мнение другой школы!
 """
 
-EXTRACTION_SYSTEM_PROMPT = """Ты — аналитический модуль астрологического бота Астра.
-Проанализируй историю диалога с пользователем и верни СТРОГО валидный JSON без лишнего текста:
+EXTRACTION_SYSTEM_PROMPT = """Ты — модуль памяти и контекста астрологического бота Астра.
+Твоя задача — проанализировать СОХРАНЁННЫЙ ПРОФИЛЬ пользователя и ВСЮ ИСТОРИЮ ДИАЛОГА, чтобы человеку НИКОГДА не приходилось писать одно и то же дважды!
+
+Верни СТРОГО валидный JSON:
 {
+  "intent": "new_chart" | "followup_on_existing_chart" | "need_more_info",
   "has_all_required_data": true/false,
+  "send_new_chart_photo": true/false,
   "chart_type": "natal" | "horary" | "synastry" | "forecast" | "mundane" | "relocation",
-  "subject_name": "Имя или описание того, о ком/чём карта (например: Анна / Хорар о работе / Мунданная карта)",
-  "date_str": "DD.MM.YYYY" или null (если хорар на текущий момент и пользователь просит построить на сейчас, укажи "NOW"),
-  "time_str": "HH:MM" или null (если хорар на текущий момент, укажи "NOW"),
-  "place_city": "Название города/населённого пункта" или null,
-  "second_person": {
-    "name": "Имя второго человека (только для synastry)" или null,
-    "date_str": "DD.MM.YYYY" или null,
-    "time_str": "HH:MM" или null,
-    "place_city": "Город" или null
-  },
-  "user_question": "Сформулированный вопрос или запрос пользователя",
-  "missing_info_question_ru": "Если has_all_required_data == false: дружелюбный, быстрый и чёткий ответ от лица Астры, где она откликается и уточняет недостающие данные (о ком/о чём речь, дату, точное время, город и источник времени рождения)."
+  "subject_name": "Имя или описание того, о ком речь (из текущего сообщения ИЛИ из памяти прошлых сообщений)",
+  "date_str": "DD.MM.YYYY" или "NOW" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
+  "time_str": "HH:MM" или "NOW" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
+  "place_city": "Название города" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
+  "user_question": "Текущий вопрос пользователя с учётом всего контекста беседы",
+  "missing_info_question_ru": "Заполняй ТОЛЬКО если has_all_required_data == false. Укажи, какие данные ты УЖЕ запомнила из диалога, и вежливо спроси только то, чего ещё не хватает."
 }
 
-Правила проверки:
-1. Если пользователь просто позвал «Астра» или задал вопрос без полных данных (нет даты, или нет времени, или нет города, или непонятно, о ком речь) -> `has_all_required_data: false`.
-2. Если вопрос хорарный («Астра, посмотри хорар, получу ли я эту работу? Я в Москве»), то для хорара достаточно сути вопроса и города кверента (`date_str: "NOW"`, `time_str: "NOW"`, `place_city: "Москва"`). Если даже города или сути вопроса нет — `has_all_required_data: false`.
-3. Если все данные (о ком/чём речь, дата, время, город) есть в последнем сообщении или в предыдущих сообщениях диалога -> `has_all_required_data: true`.
+КРИТИЧЕСКИЕ ПРАВИЛА ПАМЯТИ:
+1. Если в СОХРАНЁННОМ ПРОФИЛЕ или в предыдущих сообщениях диалога УЖЕ есть дата, время и город, и пользователь просто продолжает разговор («А что со здоровьем?», «А подробнее про 7 дом?», «А в следующем году?») ->
+   - `intent`: `"followup_on_existing_chart"`
+   - `has_all_required_data`: `true`
+   - `send_new_chart_photo`: `false` (не нужно слать ту же картинку заново, если данные карты не менялись; ставь `true` только если пользователь просит построить карту заново или дал новые данные рождения/новый хорар)
+   - подставь `date_str`, `time_str`, `place_city`, `subject_name` из сохранённого профиля/истории!
+2. Если пользователь сообщил часть данных в первом сообщении (например, дату и время), а во втором сообщении дописал только город («Москва») — объедини их! Никогда не спрашивай заново то, что уже было сказано!
+3. Если вопрос хорарный («посмотри хорар...») и город уже известен из профиля пользователя (он называл свой город ранее) — используй его сохранённый город автоматически (`date_str: "NOW"`, `time_str: "NOW"`), не переспрашивай!
 """
 
 
@@ -74,10 +72,6 @@ async def call_llm(
     temperature: float = 0.35,
     json_mode: bool = False,
 ) -> Optional[str]:
-    """
-    Call the fastest available LLM provider (Gemini -> Groq -> OpenRouter).
-    """
-    # 1. Google Gemini API (Ultra-fast Gemini 3 Flash & Flash Lite models active on this key)
     if GEMINI_API_KEY:
         models_to_try = [
             "gemini-3-flash-preview",
@@ -112,7 +106,6 @@ async def call_llm(
                 except Exception:
                     continue
 
-    # 2. Groq API (Free tier ultra-fast Llama-3.3-70b-versatile)
     if GROQ_API_KEY:
         async with httpx.AsyncClient(timeout=60.0) as client:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -133,100 +126,123 @@ async def call_llm(
             except Exception:
                 pass
 
-    # 3. OpenRouter API (Free models fallback)
-    if OPENROUTER_API_KEY:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": "google/gemini-2.0-flash-exp:free",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-            }
-            try:
-                resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-            except Exception:
-                pass
-
     return None
 
 
-def rule_based_extract_dialog(history_messages: List[Dict[str, str]]) -> Dict:
+def rule_based_extract_dialog(
+    history_messages: List[Dict[str, str]],
+    saved_profile: Optional[Dict] = None,
+) -> Dict:
     """
-    Deterministic fallback parser so Astra works instantaneously even if no external LLM key
-    is configured yet, or if the API is temporarily unreachable.
-    Extracts dates (DD.MM.YYYY), times (HH:MM), cities, and checks completeness.
+    Deterministic multi-turn memory extractor: merges saved_profile with all messages in history.
     """
-    combined_user_text = " \n ".join(m["content"] for m in history_messages if m["role"] == "user")
-    last_msg = history_messages[-1]["content"] if history_messages else ""
+    saved_profile = saved_profile or {}
+    user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
+    combined_user_text = " \n ".join(user_msgs)
+    last_msg = user_msgs[-1] if user_msgs else ""
 
-    # Check if user explicitly asks a Horary question ("хорар", "сейчас")
-    is_horary = bool(re.search(r"(хорар|horary|вопрос\s+сейчас|карта\s+вопроса)", combined_user_text, re.I))
+    is_horary = bool(re.search(r"(хорар|horary|вопрос\s+сейчас|карта\s+вопроса)", last_msg, re.I))
 
-    date_match = re.search(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", combined_user_text)
-    time_match = re.search(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", combined_user_text)
+    # Search all user messages from newest to oldest for date, time, city
+    date_Matches = list(re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", combined_user_text))
+    time_Matches = list(re.finditer(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", combined_user_text))
 
-    # Extract city patterns (e.g., "г. Москва", "город Санкт-Петербург", "родилась в Казани", or standalone known city patterns)
-    city_match = re.search(
-        r"(?:г\.|город|место|родил(?:ся|ась)\s+в|живу\s+в|нахожусь\s+в|локация|место\s+рождения)[:\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
-        combined_user_text,
-        re.I,
-    )
-    if not city_match:
-        # Also allow comma-separated format: "15.05.1995 14:30 Москва" or "15.05.1995, 14:30, Москва"
-        after_time = re.search(
-            r"\b(?:[01]?\d|2[0-3])[:.][0-5]\d[,\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
-            combined_user_text,
-        )
-        if after_time:
-            city_candidate = after_time.group(1).strip()
-        else:
-            city_candidate = None
-    else:
-        city_candidate = city_match.group(1).strip()
+    date_str = saved_profile.get("date_str")
+    new_data_in_last_msg = False
 
-    date_str = None
-    if date_match:
-        d, m, y = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
-        date_str = f"{d:02d}.{m:02d}.{y:04d}"
+    if date_Matches:
+        m_obj = date_Matches[-1]
+        d, m, y = int(m_obj.group(1)), int(m_obj.group(2)), int(m_obj.group(3))
+        new_date = f"{d:02d}.{m:02d}.{y:04d}"
+        if new_date != date_str:
+            new_data_in_last_msg = True
+        date_str = new_date
     elif is_horary:
         date_str = "NOW"
+        new_data_in_last_msg = True
 
-    time_str = None
-    if time_match:
-        hh, mm = int(time_match.group(1)), int(time_match.group(2))
-        time_str = f"{hh:02d}:{mm:02d}"
+    time_str = saved_profile.get("time_str")
+    if time_Matches:
+        t_obj = time_Matches[-1]
+        hh, mm = int(t_obj.group(1)), int(t_obj.group(2))
+        new_time = f"{hh:02d}:{mm:02d}"
+        if new_time != time_str:
+            new_data_in_last_msg = True
+        time_str = new_time
     elif is_horary:
         time_str = "NOW"
 
+    city_candidate = saved_profile.get("place_city")
+    city_matches = list(
+        re.finditer(
+            r"(?:г\.|город|место|родил(?:ся|ась)\s+в|живу\s+в|нахожусь\s+в|локация|место\s+рождения)[:\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
+            combined_user_text,
+            re.I,
+        )
+    )
+    if city_matches:
+        new_city = city_matches[-1].group(1).strip()
+        if new_city != city_candidate:
+            new_data_in_last_msg = True
+        city_candidate = new_city
+    else:
+        after_time = list(
+            re.finditer(
+                r"\b(?:[01]?\d|2[0-3])[:.][0-5]\d(?:\s*\([^)]*\))?[,\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
+                combined_user_text,
+            )
+        )
+        if after_time:
+            new_city = after_time[-1].group(1).strip()
+            if new_city != city_candidate:
+                new_data_in_last_msg = True
+            city_candidate = new_city
+        elif len(user_msgs) >= 2 and not city_candidate:
+            # Check if the user's short reply is just a city name (e.g. "Москва", "Санкт-Петербург")
+            short_clean = re.sub(r"^(?:астра[,\s]*)", "", last_msg.strip(), flags=re.I).strip(" .,!?")
+            if re.match(r"^[А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?$", short_clean) and len(short_clean) >= 3:
+                city_candidate = short_clean
+                new_data_in_last_msg = True
+
+    subject_name = saved_profile.get("subject_name") or ("Хорарный вопрос" if is_horary else "Натальная карта")
     has_all = bool(date_str and time_str and city_candidate)
+    had_chart_already = bool(saved_profile.get("has_rendered_chart"))
+
+    known_parts = []
+    if date_str and date_str != "NOW":
+        known_parts.append(f"Дата: `{date_str}`")
+    if time_str and time_str != "NOW":
+        known_parts.append(f"Время: `{time_str}`")
+    if city_candidate:
+        known_parts.append(f"Город: **{city_candidate}**")
 
     missing_parts = []
     if not date_str:
-        missing_parts.append("• **Дату рождения** (или дату события) в формате `ДД.ММ.ГГГГ`")
+        missing_parts.append("• **Дату рождения** (или события) в формате `ДД.ММ.ГГГГ`")
     if not time_str:
-        missing_parts.append("• **Точное время** в формате `ЧЧ:ММ` (укажите также, время по бирке, ректифицированное или со слов)")
+        missing_parts.append("• **Точное время** в формате `ЧЧ:ММ` (и источник: бирка, со слов, ректификация)")
     if not city_candidate:
-        missing_parts.append("• **Город / населённый пункт** рождения (или место, где вы находитесь сейчас, если это хорарный вопрос)")
+        missing_parts.append("• **Город / населённый пункт**")
 
-    missing_prompt = (
-        "✨ **Я на связи! Это Астра.**\n\n"
-        "Прежде чем я построю карту и дам точный астрологический разбор, мне важно убедиться, "
-        "**о ком или о чём именно идёт речь**, и проверить все исходные координаты.\n\n"
-        "Пожалуйста, уточните:\n"
-        "1. **О ком или о чём вопрос?** (ваша натальная карта, карта другого человека, совместимость/синастрия, прогноз на период или хорарный вопрос «здесь и сейчас»)\n"
-        + "\n".join(missing_parts)
-        + "\n\n*Пример: «Астра, разбери мою натальную карту (Анна), карьера и финансы: 14.08.1996, 11:25 (по бирке), г. Екатеринбург».*"
+    known_prefix = (
+        f"✅ *Я уже записала: {', '.join(known_parts)}.*\n\nЧтобы построить карту, уточните только недостающее:\n"
+        if known_parts
+        else (
+            "✨ **Я на связи! Это Астра.**\n\n"
+            "Напишите один раз данные (я их запомню и больше переспрашивать не буду):\n"
+            "• **О ком или о чём вопрос?**\n"
+        )
     )
+    missing_prompt = known_prefix + "\n".join(missing_parts)
+
+    send_photo = (not had_chart_already) or new_data_in_last_msg or bool(re.search(r"(покажи\s+карту|пришли\s+карту|фото|картинк)", last_msg, re.I))
 
     return {
+        "intent": "new_chart" if send_photo else "followup_on_existing_chart",
         "has_all_required_data": has_all,
-        "chart_type": "horary" if is_horary else "natal",
-        "subject_name": "Хорарный вопрос" if is_horary else "Натальная карта",
+        "send_new_chart_photo": send_photo,
+        "chart_type": "horary" if is_horary else (saved_profile.get("chart_type") or "natal"),
+        "subject_name": subject_name,
         "date_str": date_str,
         "time_str": time_str,
         "place_city": city_candidate,
@@ -235,18 +251,23 @@ def rule_based_extract_dialog(history_messages: List[Dict[str, str]]) -> Dict:
     }
 
 
-async def analyze_dialog_completeness(history_messages: List[Dict[str, str]]) -> Dict:
+async def analyze_dialog_completeness(
+    history_messages: List[Dict[str, str]],
+    saved_profile: Optional[Dict] = None,
+) -> Dict:
     """
-    Determine whether the user has provided all necessary information (WHO/WHAT, Date, Time, City)
-    or whether Astra must ask clarifying questions first.
+    Analyze full conversation history + saved user profile so the user never has to repeat anything.
     """
+    saved_profile = saved_profile or {}
     convo_text = "\n".join(
         f"{'Пользователь' if m['role'] == 'user' else 'Астра'}: {m['content']}"
-        for m in history_messages[-8:]
+        for m in history_messages[-24:]
     )
+    profile_str = json.dumps(saved_profile, ensure_ascii=False) if saved_profile else "Пока пуст"
+
     raw_json = await call_llm(
         EXTRACTION_SYSTEM_PROMPT,
-        f"История диалога:\n{convo_text}\n\nВерни JSON оценки полноты данных:",
+        f"СОХРАНЁННЫЙ ПРОФИЛЬ В ПАМЯТИ БОТА:\n{profile_str}\n\nПОЛНАЯ ИСТОРИЯ ДИАЛОГА:\n{convo_text}\n\nВерни JSON:",
         temperature=0.1,
         json_mode=True,
     )
@@ -255,18 +276,20 @@ async def analyze_dialog_completeness(history_messages: List[Dict[str, str]]) ->
             cleaned = re.sub(r"^```(?:json)?|```$", "", raw_json.strip(), flags=re.M).strip()
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict) and "has_all_required_data" in parsed:
+                # Merge with saved_profile fallback if LLM left any field empty while saved_profile had it
+                for field in ("date_str", "time_str", "place_city", "subject_name", "chart_type"):
+                    if not parsed.get(field) and saved_profile.get(field):
+                        parsed[field] = saved_profile[field]
+                if parsed.get("date_str") and parsed.get("time_str") and parsed.get("place_city"):
+                    parsed["has_all_required_data"] = True
                 return parsed
         except Exception:
             pass
 
-    return rule_based_extract_dialog(history_messages)
+    return rule_based_extract_dialog(history_messages, saved_profile)
 
 
 def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages: List[Dict]) -> str:
-    """
-    Comprehensive multi-school synthesis generator used when no external LLM key is active
-    or as a structured foundation, explicitly citing schools and alternative viewpoints.
-    """
     asc = chart["asc"]
     mc = chart["mc"]
     hm = chart["hellenistic_medieval"]
@@ -305,7 +328,6 @@ def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages
         f"(в Полнознаковой системе: {moon['house_wholesign']}-й дом).",
     ])
 
-    # Check if any planets shift houses between Placidus and Whole Sign
     shifted = [
         f"**{p['name']}** (Плацидус: {p['house_placidus']} дом ↔ Полнознаковая: {p['house_wholesign']} дом)"
         for p in chart["planets"][:10]
@@ -328,9 +350,6 @@ def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages
         f"Владыка (Хронократор) года по классике — **{hm['annual_profection']['lord_of_year_trad']}** "
         + (f"(по модерну — **{hm['annual_profection']['lord_of_year_mod']}**)." if hm['annual_profection']['lord_of_year_mod'] != hm['annual_profection']['lord_of_year_trad'] else "."),
         f"• **Средневековый Фирдар сейчас:** Большой период — **{hm['firdaria']['major_firdar']}**, подпериод — **{hm['firdaria']['sub_firdar']}**.",
-    ])
-
-    parts.extend([
         "",
         "### 3. Формула Души (Цепочки диспозиторов) и Кармическая задача",
         f"• **Центры по владению (Школа Формулы Души А. Астрогора / современный расчёт 10 планет):** "
@@ -338,33 +357,16 @@ def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages
         f"• **Альтернативный расчёт по классическому септенеру (7 планет без транссатурнов):** "
         f"{', '.join(fos['traditional_centers_domicile']) if fos['traditional_centers_domicile'] else 'центры через взаимную рецепцию септенера'}.",
         f"• **Кармические Узлы и Лилит:** Северный Узел (Раху) в {planets['Сев. Узел (Раху)']['formatted']} "
-        f"({planets['Сев. Узел (Раху)']['house_primary']}-й дом) показывает вектор эволюционного роста, а Южный Узел (Кету) в "
-        f"{planets['Южн. Узел (Кету)']['formatted']} ({planets['Южн. Узел (Кету)']['house_primary']}-й дом) — врождённый опыт. "
-        f"Лилит в {planets['Лилит (Чёрная Луна)']['formatted']} ({planets['Лилит (Чёрная Луна)']['house_primary']}-й дом) указывает на точку искушений и психологической тени.",
-    ])
-
-    parts.extend([
+        f"({planets['Сев. Узел (Раху)']['house_primary']}-й дом), Южный Узел (Кету) в "
+        f"{planets['Южн. Узел (Кету)']['formatted']} ({planets['Южн. Узел (Кету)']['house_primary']}-й дом), "
+        f"Лилит в {planets['Лилит (Чёрная Луна)']['formatted']} ({planets['Лилит (Чёрная Луна)']['house_primary']}-й дом).",
         "",
         "### 4. Ураническая астрология (Гамбургская школа А. Витте) и Космобиология (Р. Эбертин)",
-        f"• **Мидпойнт Солнце/Луна (☉/☽):** `{ur['sun_moon_midpoint']}` — точка психофизического синтеза и партнёрского резонанса.",
+        f"• **Мидпойнт Солнце/Луна (☉/☽):** `{ur['sun_moon_midpoint']}`.",
     ])
     if ur["transneptunians"]:
         tn_str = ", ".join(f"**{t['name']}**: {t['formatted']}" for t in ur["transneptunians"])
         parts.append(f"• **Положения 8 транснептунов Гамбургской школы:** {tn_str}.")
-
-    if chart["aspects"]:
-        top_asp = sorted(chart["aspects"], key=lambda x: x["orb"])[:8]
-        parts.append("\n### 5. Точные аспекты (с учётом сходящегося / расходящегося движения)")
-        for a in top_asp:
-            parts.append(f"• **{a['p1']} {a['glyph']} {a['p2']}** — {a['aspect']} (орбис `{a['orb']}°`, *{a['motion']}*)")
-
-    if rag_passages:
-        cited_books = []
-        for ch in rag_passages[:4]:
-            label = f"«{ch['book']}» ({ch['school']})"
-            if label not in cited_books:
-                cited_books.append(label)
-        parts.append("\n📚 **Источники из базы знаний и канона:**\n" + "\n".join(f"• {b}" for b in cited_books))
 
     return "\n".join(parts)
 
@@ -373,11 +375,11 @@ async def generate_astrological_interpretation(
     chart: Dict,
     user_question: str,
     rag_passages: List[Dict],
+    history_messages: Optional[List[Dict[str, str]]] = None,
     second_chart: Optional[Dict] = None,
 ) -> str:
     """
-    Generate a deep multi-tradition astrological reading using exact Swiss Ephemeris data
-    and highest-authority book passages from the RAG index.
+    Generate a deep multi-tradition astrological reading with full awareness of prior dialog history.
     """
     chart_text = format_chart_for_llm(chart)
     if second_chart:
@@ -388,22 +390,28 @@ async def generate_astrological_interpretation(
         for c in rag_passages
     )
 
+    history_block = ""
+    if history_messages and len(history_messages) > 1:
+        recent_turns = []
+        for m in history_messages[-14:-1]:
+            role_lbl = "Пользователь" if m["role"] == "user" else "Астра"
+            recent_turns.append(f"{role_lbl}: {m['content'][:700]}")
+        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА С ПОЛЬЗОВАТЕЛЕМ (НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ ДОСЛОВНО, ПРОДОЛЖАЙ РАЗГОВОР ЕСТЕСТВЕННО):\n" + "\n".join(recent_turns) + "\n\n"
+
     prompt = (
-        f"ЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_question}\n\n"
-        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ШВЕЙЦАРСКИХ ЭФЕМЕРИД:\n{chart_text}\n\n"
-        f"ФРАГМЕНТЫ ИЗ АВТОРИТЕТНЫХ АСТРОЛОГИЧЕСКИХ КНИГ (опирайся на источники с наивысшим рейтингом авторитетности):\n{rag_context}\n\n"
+        f"{history_block}"
+        f"ТЕКУЩИЙ ВОПРОС / РЕПЛИКА ПОЛЬЗОВАТЕЛЯ:\n{user_question}\n\n"
+        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ШВЕЙЦАРСКИХ ЭФЕМЕРИД (КАРТА УЖЕ В ПАМЯТИ):\n{chart_text}\n\n"
+        f"ФРАГМЕНТЫ ИЗ АВТОРИТЕТНЫХ АСТРОЛОГИЧЕСКИХ КНИГ:\n{rag_context}\n\n"
         "ИНСТРУКЦИЯ ДЛЯ ОТВЕТА:\n"
-        "1. Дай глубокий, профессиональный, структурированный ответ на вопрос пользователя строго по рассчитанным градусам, домам, достоинствам и аспектам.\n"
+        "1. Отвечай прямо и глубоко на текущий вопрос пользователя, учитывая весь контекст вашего предыдущего разговора и точные градусы/дома/аспекты карты.\n"
         "2. В каждом смысловом блоке КОРОТКО УКАЗЫВАЙ, на какое именно направление/школу ты опираешься (Западная классическая, Современная психологическая, Эллинистическая/Средневековая, Хорарная школа Региомонтануса/Лилли/Фроули, Ураническая/Гамбургская школа, Формула Души, Кармическая).\n"
-        "3. Если между школами есть противоречия (например: классический управитель знака по септенеру vs современный транссатурновый управитель; дом в системе Плацидуса vs дом в Полнознаковой системе; классическая оценка достоинств/вредителей vs современная), обязательно опирайся на наиболее авторитетный канон и явно укажи вторую точку зрения как «Альтернативное мнение другой школы».\n"
-        "4. Пиши живым, ясным, уважительным языком на русском языке с удобным форматированием."
+        "3. Если между школами есть противоречия (классический управитель по септенеру vs современный транссатурновый управитель; дом в системе Плацидуса vs дом в Полнознаковой системе), опирайся на наиболее авторитетный канон и явно укажи вторую точку зрения как «Альтернативное мнение другой школы».\n"
+        "4. Пиши живым, ясным языком на русском языке."
     )
 
     llm_answer = await call_llm(ASTRA_SYSTEM_PROMPT, prompt, temperature=0.35, json_mode=False)
-    if llm_answer and len(llm_answer.strip()) > 120:
+    if llm_answer and len(llm_answer.strip()) > 80:
         return llm_answer.strip()
 
     return build_offline_expert_synthesis(chart, user_question, rag_passages)
-
-
-from bot.astro_engine import format_chart_for_llm  # noqa: E402

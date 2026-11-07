@@ -3,18 +3,18 @@ Main Telegram Bot Entrypoint for ARCANA ("Аркана") Tarot Bot + Built-in 24
 
 Features:
 1. Instant Wake-Word Trigger: Responds immediately whenever anyone writes "Аркана" / "Arcana"
-   in any case, language, or grammatical form (in both private chats and group chats).
-2. Strict Pre-Answer Verification: Always verifies WHO/WHAT the question is about,
-   the context/timeframe, and whether Arcana should draw the cards or interpret user-drawn cards.
-3. High-Resolution Tarot Spread Photo Generation & Delivery (with Upright/Reversed,
-   Bottom of the Deck, Quintessence, and Elemental Dignities).
-4. Multi-Tradition Synthesis (Rider-Waite-Smith, Crowley Thoth, Marseille/French, Golden Dawn, Jungian)
-   with explicit school attribution & alternative school comparisons.
-5. Book Library Management (`/books` + direct file or Yandex.Disk upload in chat).
+   in any case, language, or grammatical form.
+2. Full Conversation & Spread Memory: Remembers the user's subject/context, previous spreads,
+   and full dialog history in SQLite so the user NEVER has to repeat the same information!
+3. Smart Follow-Up Mode: When the user asks follow-up questions about an already drawn spread
+   ("А что значит 2 карта?", "А почему на дне Отшельник?"), Arcana answers immediately from memory
+   without forcing the user to repeat their question or reshuffling cards unless a new spread is requested.
+4. Rich Telegram HTML Formatting: Clean bold headers, blockquotes, dividers, and typographic bullets.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -36,6 +36,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     contains_arcana_wake_word,
 )
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
 from bot.llm_tarot import analyze_tarot_dialog_completeness, generate_tarot_interpretation
 from bot.spread_renderer import render_spread_image
@@ -74,6 +75,17 @@ class DialogStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    profile_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+                """
+            )
 
     def mark_active(self, chat_id: int, user_id: int) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -86,7 +98,7 @@ class DialogStore:
                 (chat_id, user_id, time.time()),
             )
 
-    def is_recently_active(self, chat_id: int, user_id: int, ttl_seconds: int = 1800) -> bool:
+    def is_recently_active(self, chat_id: int, user_id: int, ttl_seconds: int = 86400) -> bool:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 "SELECT last_active FROM active_sessions WHERE chat_id = ? AND user_id = ?",
@@ -97,10 +109,43 @@ class DialogStore:
                 return False
             return (time.time() - float(row[0])) <= ttl_seconds
 
+    def get_profile(self, chat_id: int, user_id: int) -> Dict:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                "SELECT profile_json FROM user_profiles WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            try:
+                return json.loads(row[0])
+            except Exception:
+                return {}
+
+    def update_profile(self, chat_id: int, user_id: int, updates: Dict) -> Dict:
+        current = self.get_profile(chat_id, user_id)
+        for k, v in updates.items():
+            if v is not None and v != "":
+                current[k] = v
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO user_profiles (chat_id, user_id, profile_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                    profile_json = excluded.profile_json,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, user_id, json.dumps(current, ensure_ascii=False), time.time()),
+            )
+        return current
+
     def clear_session(self, chat_id: int, user_id: int) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
             conn.execute("DELETE FROM active_sessions WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            conn.execute("DELETE FROM user_profiles WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
 
     def add_message(self, chat_id: int, user_id: int, role: str, content: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -109,7 +154,7 @@ class DialogStore:
                 (chat_id, user_id, role, content, time.time()),
             )
 
-    def get_history(self, chat_id: int, user_id: int, limit: int = 10) -> List[Dict[str, str]]:
+    def get_history(self, chat_id: int, user_id: int, limit: int = 30) -> List[Dict[str, str]]:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 "SELECT role, content FROM messages WHERE chat_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
@@ -124,28 +169,6 @@ store = DialogStore(DB_PATH)
 dp = Dispatcher()
 
 
-def split_long_telegram_message(text: str, max_len: int = 3900) -> List[str]:
-    if len(text) <= max_len:
-        return [text]
-    chunks = []
-    current = ""
-    for para in text.split("\n\n"):
-        if len(current) + len(para) + 2 <= max_len:
-            current = f"{current}\n\n{para}".strip()
-        else:
-            if current:
-                chunks.append(current)
-            if len(para) <= max_len:
-                current = para
-            else:
-                for i in range(0, len(para), max_len):
-                    chunks.append(para[i : i + max_len])
-                current = ""
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 @dp.message(Command("start", "help"))
 async def cmd_start(message: Message) -> None:
     chat_id = message.chat.id
@@ -154,22 +177,18 @@ async def cmd_start(message: Message) -> None:
 
     welcome = (
         "🃏 **Приветствую! Я — Аркана (Arcana), ваш автономный таролог-эксперт всех школ Таро.**\n\n"
-        "Я мгновенно откликаюсь, как только вы напишете моё имя **«Аркана»** / **«Arcana»** "
-        "(в любом регистре, падеже и на любом языке).\n\n"
+        "Я мгновенно откликаюсь на имя **«Аркана»** / **«Arcana»** и **помню весь наш диалог и сделанные расклады**, "
+        "поэтому вам никогда не придётся повторять одно и то же!\n\n"
         "🔮 **В каких традициях и системах я работаю:**\n"
         "• **Английская классическая школа (Уэйт RWS и Орден Золотой Зари)**.\n"
         "• **Таро Тота Алистера Кроули** (каббалистические сефирот, астрологические деканы, телемитская система).\n"
         "• **Марсельское и Французское Таро** (Папюс, Элифас Леви, Ходоровски).\n"
         "• **Прямые и перевёрнутые карты**, расчёт **Дна колоды** (скрытого мотива), **Квинтэссенции** (итогового совета по сумме арканов) и **Элементальных достоинств** (баланса стихий).\n\n"
-        "📐 **Как я работаю:**\n"
-        "1. Перед раскладом я всегда уточняю **о ком или о чём идёт речь**, суть вопроса и режим работы (вытянуть ли карты мне самой или разобрать расклад, который вы выложили вживую).\n"
-        "2. Строю и присылаю **красивую фотографию расклада** со всеми выпавшими картами, Дном колоды и Квинтэссенцией.\n"
-        "3. В разборе **всегда указываю, на какую школу опираюсь**, а при разногласиях школ привожу **альтернативное мнение**.\n\n"
         "📚 Команда `/books` — посмотреть загруженные книги по Таро.\n"
-        "🔄 Команда `/reset` — начать новый вопрос или новый расклад с чистого листа.\n\n"
+        "🔄 Команда `/reset` — перетасовать колоду и начать совершенно новую тему с нуля.\n\n"
         "*Напишите свой вопрос или просто позовите меня: «Аркана»!*"
     )
-    await message.reply(welcome, parse_mode=ParseMode.MARKDOWN)
+    await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("reset"))
@@ -179,9 +198,10 @@ async def cmd_reset(message: Message) -> None:
     store.clear_session(chat_id, user_id)
     store.mark_active(chat_id, user_id)
     await message.reply(
-        "🔄 Колода перетасована, контекст очищен! Напишите, **о ком или о чём** ваш новый вопрос "
-        "и какой расклад сделать.",
-        parse_mode=ParseMode.MARKDOWN,
+        markdown_to_telegram_html(
+            "🔄 Колода перетасована, память предыдущего расклада очищена! Напишите, **о ком или о чём** ваш новый вопрос."
+        ),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -205,11 +225,7 @@ async def cmd_books(message: Message) -> None:
     else:
         lines.append("\n✅ *Нечитаемых или повреждённых файлов не обнаружено.*")
 
-    lines.append(
-        "\n💡 *Вы можете прямо сюда в чат прислать файл книги (PDF, DOCX, EPUB, FB2, TXT) "
-        "или публичную ссылку на Яндекс.Диск — я сразу скачаю и изучу её!*"
-    )
-    await message.reply("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await message.reply(markdown_to_telegram_html("\n".join(lines)), parse_mode=ParseMode.HTML)
 
 
 @dp.message(F.document)
@@ -218,7 +234,10 @@ async def handle_book_document(message: Message, bot: Bot) -> None:
     if not doc or not doc.file_name:
         return
     target_path = BOOKS_DIR / doc.file_name
-    status_msg = await message.reply(f"📥 Загружаю и изучаю книгу по Таро `{doc.file_name}`...", parse_mode=ParseMode.MARKDOWN)
+    status_msg = await message.reply(
+        markdown_to_telegram_html(f"📥 Загружаю и изучаю книгу по Таро `{doc.file_name}`..."),
+        parse_mode=ParseMode.HTML,
+    )
     try:
         file_info = await bot.get_file(doc.file_id)
         await bot.download_file(file_info.file_path, destination=target_path)
@@ -226,18 +245,22 @@ async def handle_book_document(message: Message, bot: Bot) -> None:
         summary = knowledge_base.load_or_build_index()
         if err:
             await status_msg.edit_text(
-                f"⚠️ Я сохранила файл `{doc.file_name}`, но **не смогла его прочитать**:\n"
-                f"Причина: *{err}*\n\nПожалуйста, пришлите текстовую версию (PDF с текстом, DOCX, FB2, EPUB или TXT).",
-                parse_mode=ParseMode.MARKDOWN,
+                markdown_to_telegram_html(
+                    f"⚠️ Я сохранила файл `{doc.file_name}`, но **не смогла его прочитать**:\n"
+                    f"Причина: *{err}*\n\nПожалуйста, пришлите текстовую версию (PDF с текстом, DOCX, FB2, EPUB или TXT)."
+                ),
+                parse_mode=ParseMode.HTML,
             )
         else:
             await status_msg.edit_text(
-                f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Арканы!\n"
-                f"Всего фрагментов в базе: **{summary['total_chunks']}**.",
-                parse_mode=ParseMode.MARKDOWN,
+                markdown_to_telegram_html(
+                    f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Арканы!\n"
+                    f"Всего фрагментов в базе: **{summary['total_chunks']}**."
+                ),
+                parse_mode=ParseMode.HTML,
             )
     except Exception as exc:
-        await status_msg.edit_text(f"❌ Ошибка при загрузке файла `{doc.file_name}`: {exc}")
+        await status_msg.edit_text(f"❌ Ошибка при загрузке файла {doc.file_name}: {exc}")
 
 
 @dp.message(F.text)
@@ -253,7 +276,10 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     ydisk_match = re.search(r"https?://(?:disk\.yandex\.[a-z]+|yadi\.sk)/\S+", text, re.I)
     if ydisk_match:
         url = ydisk_match.group(0)
-        wait_msg = await message.reply("☁️ Обнаружена ссылка на Яндекс.Диск! Скачиваю и проверяю книги...", parse_mode=ParseMode.MARKDOWN)
+        wait_msg = await message.reply(
+            markdown_to_telegram_html("☁️ Обнаружена ссылка на Яндекс.Диск! Скачиваю и проверяю книги..."),
+            parse_mode=ParseMode.HTML,
+        )
         downloaded, dl_errors = await asyncio.to_thread(download_from_yandex_disk, url, BOOKS_DIR)
         summary = await asyncio.to_thread(knowledge_base.load_or_build_index)
         report = [
@@ -268,7 +294,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
                 "\n⚠️ **Книги, которые я НЕ смогла прочитать (нужен OCR или другой формат):**\n"
                 + "\n".join(f"• ❌ `{u['file']}` — {u['reason']}" for u in summary["unreadable_files"])
             )
-        await wait_msg.edit_text("\n".join(report), parse_mode=ParseMode.MARKDOWN)
+        await wait_msg.edit_text(markdown_to_telegram_html("\n".join(report)), parse_mode=ParseMode.HTML)
         return
 
     has_wake_word = contains_arcana_wake_word(text)
@@ -287,86 +313,101 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    saved_profile = store.get_profile(chat_id, user_id)
+    history = store.get_history(chat_id, user_id, limit=26)
+
     stripped_without_wake = re.sub(
         r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|аркана|аркану|аркане|арканой|arcana|arkana|αρκάνα|ארקנה|أركانا|अर्काना|[!?,.\s])+",
         "",
         text,
         flags=re.I,
     )
-    history = store.get_history(chat_id, user_id, limit=10)
 
-    if len(stripped_without_wake) < 3 and len(history) <= 2:
+    if len(stripped_without_wake) < 3 and not saved_profile.get("last_spread") and len(history) <= 2:
         instant_greeting = (
             "🃏 **Я здесь! Аркана на связи и готова к работе с колодой.**\n\n"
-            "Перед тем как я вытяну карты или разберу ваш расклад, расскажите мне:\n"
-            "1. **О ком или о чём ваш вопрос?** (назовите имена или роли участников, сферу — отношения, карьера, финансы, выбор — и загаданный срок).\n"
-            "2. **Как делаем расклад?**\n"
-            "   • Я сама вытягиваю карты и присылаю фото расклада (*Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт* или *1 карта + Дно колоды*);\n"
-            "   • Или вы сами выложили карты вживую и напишете мне, какие арканы выпали!\n\n"
-            "Как только уточните детали — я сразу пришлю фотографию расклада и сделаю глубокий разбор по всем школам Таро!"
+            "Напишите мне один раз:\n"
+            "1. **О ком или о чём ваш вопрос?** (имена/роли, сфера, сроки).\n"
+            "2. **Как делаем расклад?** Вытянуть ли карты мне самой (*Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт* или *1 карта + Дно колоды*) — или разобрать ваши выпавшие карты?\n\n"
+            "Я **запомню весь контекст нашей беседы**, пришлю фотографию расклада и смогу отвечать на любые ваши уточняющие вопросы!"
         )
         store.add_message(chat_id, user_id, "assistant", instant_greeting)
-        await message.reply(instant_greeting, parse_mode=ParseMode.MARKDOWN)
+        await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
         return
 
-    analysis = await analyze_tarot_dialog_completeness(history)
+    analysis = await analyze_tarot_dialog_completeness(history, saved_profile=saved_profile)
+
+    store.update_profile(
+        chat_id,
+        user_id,
+        {
+            "subject_name": analysis.get("subject_name"),
+            "spread_type": analysis.get("spread_type"),
+        },
+    )
 
     if not analysis.get("has_all_required_data"):
         clarification = analysis.get("missing_info_question_ru") or (
-            "🃏 **Я на связи!** Чтобы расклад был максимально точным, уточните, пожалуйста:\n"
-            "• **О ком или о чём именно вопрос** (имена/роли, сфера, срок)?\n"
-            "• Вытянуть ли карты мне самой или вы напишете свои выпавшие карты?"
+            "🃏 Уточните, пожалуйста, **о ком или о чём именно вопрос**, чтобы я настроилась на расклад!"
         )
         store.add_message(chat_id, user_id, "assistant", clarification)
-        await message.reply(clarification, parse_mode=ParseMode.MARKDOWN)
+        await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
         return
 
-    ack_msg = await message.reply(
-        "🕯 **Запрос принят!** Настраиваюсь на вопрос, тасую колоду, выкладываю арканы, "
-        "фиксирую Дно колоды, рассчитываю Квинтэссенцию и готовлю фотографию расклада...",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
-    spread_type = analysis.get("spread_type") or "triplet"
-    subject_name = analysis.get("subject_name") or "Запрос Кверента"
+    updated_profile = store.get_profile(chat_id, user_id)
+    spread_type = analysis.get("spread_type") or updated_profile.get("spread_type") or "triplet"
+    subject_name = analysis.get("subject_name") or updated_profile.get("subject_name") or "Запрос Кверента"
     user_q = analysis.get("user_question") or text
     custom_cards = analysis.get("custom_cards")
     if isinstance(custom_cards, list) and len(custom_cards) == 0:
         custom_cards = None
 
-    spread = await asyncio.to_thread(
-        draw_tarot_spread,
-        spread_type=spread_type,
-        question=user_q,
-        subject_name=subject_name,
-        allow_reversed=True,
-        custom_cards_query=custom_cards,
-    )
+    draw_new = bool(analysis.get("draw_new_spread", True)) or not updated_profile.get("last_spread")
 
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-    img_filename = f"spread_{chat_id}_{int(time.time())}.png"
-    img_path = SPREADS_DIR / img_filename
-    await asyncio.to_thread(render_spread_image, spread, img_path)
+    ack_text = (
+        "🕯 **Тасую колоду, выкладываю арканы, фиксирую Дно колоды и рассчитываю Квинтэссенцию...**"
+        if draw_new
+        else "🃏 **Обращаюсь к вашему текущему раскладу и раскрываю детали...**"
+    )
+    ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
-    cards_brief = " | ".join(
-        f"{c['position_index']}. {c['name_ru']} ({'⟲' if c['is_reversed'] else '↑'})"
-        for c in spread["cards"][:5]
-    )
-    bot_card = spread["bottom_of_deck"]
-    q_card = spread["quintessence"]["card"]
+    if draw_new:
+        spread = await asyncio.to_thread(
+            draw_tarot_spread,
+            spread_type=spread_type,
+            question=user_q,
+            subject_name=subject_name,
+            allow_reversed=True,
+            custom_cards_query=custom_cards,
+        )
+        store.update_profile(chat_id, user_id, {"last_spread": spread})
 
-    photo_caption = (
-        f"🃏 **{spread['spread_title']}**\n"
-        f"🎯 *О ком/чём:* {subject_name}\n"
-        f"🎴 *Карты:* {cards_brief}\n"
-        f"🌊 *Дно колоды (скрытый мотив):* **[{bot_card['roman']}] {bot_card['name_ru']}** ({bot_card['orientation_ru']})\n"
-        f"✨ *Квинтэссенция (Совет):* **[{q_card['roman']}] {q_card['name_ru']}**"
-    )
-    await message.reply_photo(
-        photo=FSInputFile(img_path),
-        caption=photo_caption[:1000],
-        parse_mode=ParseMode.MARKDOWN,
-    )
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+        img_filename = f"spread_{chat_id}_{int(time.time())}.png"
+        img_path = SPREADS_DIR / img_filename
+        await asyncio.to_thread(render_spread_image, spread, img_path)
+
+        cards_brief = " | ".join(
+            f"{c['position_index']}. {c['name_ru']} ({'⟲' if c['is_reversed'] else '↑'})"
+            for c in spread["cards"][:5]
+        )
+        bot_card = spread["bottom_of_deck"]
+        q_card = spread["quintessence"]["card"]
+
+        photo_caption = (
+            f"🃏 **{spread['spread_title']}**\n"
+            f"🎯 *О ком/чём:* {subject_name}\n"
+            f"🎴 *Карты:* {cards_brief}\n"
+            f"🌊 *Дно колоды (скрытый мотив):* **[{bot_card['roman']}] {bot_card['name_ru']}** ({bot_card['orientation_ru']})\n"
+            f"✨ *Квинтэссенция (Совет):* **[{q_card['roman']}] {q_card['name_ru']}**"
+        )
+        await message.reply_photo(
+            photo=FSInputFile(img_path),
+            caption=markdown_to_telegram_html(photo_caption)[:1000],
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        spread = updated_profile["last_spread"]
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     search_query = " ".join(c["name_ru"] for c in spread["cards"]) + " " + user_q
@@ -376,6 +417,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         spread=spread,
         user_question=user_q,
         rag_passages=rag_passages,
+        history_messages=history,
     )
     store.add_message(chat_id, user_id, "assistant", reading)
 
@@ -384,9 +426,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     except Exception:
         pass
 
-    for part in split_long_telegram_message(reading):
+    for part in split_html_telegram_message(reading):
         try:
-            await message.reply(part, parse_mode=ParseMode.MARKDOWN)
+            await message.reply(part, parse_mode=ParseMode.HTML)
         except Exception:
             await message.reply(part)
 

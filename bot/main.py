@@ -3,21 +3,18 @@ Main Telegram Bot Entrypoint for ASTRA ("Астра") + Built-in 24/7 Cloud Heal
 
 Features:
 1. Instant Wake-Word Trigger: Responds immediately whenever anyone writes "Астра" / "Astra"
-   in any case, language, or grammatical form (in both private chats and group chats).
-2. Active Session Continuity: Once awakened in a chat or replied to, Astra stays attentive
-   to collect missing birth/horary details until the chart & reading are delivered.
-3. Strict Pre-Answer Verification: Always verifies WHO/WHAT the question is about,
-   exact Date, Time (and time source), and City before calculating.
-4. High-Resolution Natal/Horary/Synastry/Mundane Chart Photo Generation & Delivery.
-5. Multi-Tradition Synthesis with explicit school attribution & alternative school comparisons.
-6. Book Library Management: Users/owners can send book files (PDF/EPUB/FB2/DOCX/TXT) or
-   Yandex.Disk links directly in Telegram or via `/books` to index new books on the fly
-   and get an immediate report on any unreadable files.
+   in any case, language, or grammatical form.
+2. Full Conversation & Profile Memory: Remembers user/subject birth data, city, and full dialog
+   history in SQLite so the user NEVER has to repeat the same information!
+3. Smart Follow-Up Mode: When the user asks follow-up questions ("А что с финансами?",
+   "Расскажи подробнее про 7 дом"), Astra answers immediately using the remembered chart
+   without re-asking birth details or re-sending the same photo (unless a new chart is requested).
 """
 from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import os
 import re
@@ -41,6 +38,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     contains_astra_wake_word,
 )
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
 from bot.llm_astrologer import analyze_dialog_completeness, generate_astrological_interpretation
 
@@ -49,7 +47,7 @@ logger = logging.getLogger("astra_bot")
 
 
 class DialogStore:
-    """SQLite-backed conversation memory so Astra remembers context across messages."""
+    """SQLite-backed long-term conversation & profile memory."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -79,6 +77,17 @@ class DialogStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    profile_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+                """
+            )
 
     def mark_active(self, chat_id: int, user_id: int) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -91,7 +100,8 @@ class DialogStore:
                 (chat_id, user_id, time.time()),
             )
 
-    def is_recently_active(self, chat_id: int, user_id: int, ttl_seconds: int = 1800) -> bool:
+    def is_recently_active(self, chat_id: int, user_id: int, ttl_seconds: int = 86400) -> bool:
+        """Keep session active for 24 hours so users can naturally continue the conversation."""
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 "SELECT last_active FROM active_sessions WHERE chat_id = ? AND user_id = ?",
@@ -102,10 +112,43 @@ class DialogStore:
                 return False
             return (time.time() - float(row[0])) <= ttl_seconds
 
+    def get_profile(self, chat_id: int, user_id: int) -> Dict:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                "SELECT profile_json FROM user_profiles WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            try:
+                return json.loads(row[0])
+            except Exception:
+                return {}
+
+    def update_profile(self, chat_id: int, user_id: int, updates: Dict) -> Dict:
+        current = self.get_profile(chat_id, user_id)
+        for k, v in updates.items():
+            if v is not None and v != "":
+                current[k] = v
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO user_profiles (chat_id, user_id, profile_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                    profile_json = excluded.profile_json,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, user_id, json.dumps(current, ensure_ascii=False), time.time()),
+            )
+        return current
+
     def clear_session(self, chat_id: int, user_id: int) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
             conn.execute("DELETE FROM active_sessions WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            conn.execute("DELETE FROM user_profiles WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
 
     def add_message(self, chat_id: int, user_id: int, role: str, content: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -114,7 +157,7 @@ class DialogStore:
                 (chat_id, user_id, role, content, time.time()),
             )
 
-    def get_history(self, chat_id: int, user_id: int, limit: int = 10) -> List[Dict[str, str]]:
+    def get_history(self, chat_id: int, user_id: int, limit: int = 30) -> List[Dict[str, str]]:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 "SELECT role, content FROM messages WHERE chat_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?",
@@ -130,7 +173,6 @@ dp = Dispatcher()
 
 
 def split_long_telegram_message(text: str, max_len: int = 3900) -> List[str]:
-    """Split long astrological readings cleanly by paragraphs so Telegram never truncates."""
     if len(text) <= max_len:
         return [text]
     chunks = []
@@ -160,22 +202,18 @@ async def cmd_start(message: Message) -> None:
 
     welcome = (
         "✨ **Приветствую! Я — Астра (Astra), ваш автономный астролог-эксперт.**\n\n"
-        "Я откликаюсь в любой момент, как только вы напишете моё имя **«Астра»** / **«Astra»** "
-        "(в любом регистре и на любом языке).\n\n"
+        "Я откликаюсь в любой момент, как только вы напишете моё имя **«Астра»** / **«Astra»**, "
+        "и **помню весь наш диалог и ваши данные рождения**, чтобы вам никогда не приходилось писать одно и то же дважды!\n\n"
         "🔮 **В каких направлениях я работаю:**\n"
         "• **Западная классическая и современная астрология** (натал, транзиты, соляры, прогрессии, синастрия, релокация/астрокартография, мунданная).\n"
-        "• **Хорарная и Элективная астрология** (ответы на конкретные вопросы и подбор лучшего времени по У. Лилли и Дж. Фроули, дома Региомонтануса).\n"
+        "• **Хорарная и Элективная астрология** (У. Лилли и Дж. Фроули, дома Региомонтануса).\n"
         "• **Эллинистическая и Средневековая традиция** (секта карты, полнознаковые дома, Жребии Фортуны и Духа, годовые профекции, фирдары).\n"
         "• **Ураническая (Гамбургская школа), Гелиоцентрическая, Кармическая астрология и Формула Души** (8 транснептунов, мидпойнты, цепочки диспозиторов).\n\n"
-        "📐 **Как я работаю:**\n"
-        "1. Перед ответом я всегда уточняю **о ком или о чём идёт речь** и проверяю все координаты (дату, точное время, город).\n"
-        "2. Строю и присылаю **изображение натальной/хорарной карты фотографией**.\n"
-        "3. В разборе **всегда указываю, на какую школу опираюсь**, а при разногласиях школ привожу **альтернативное мнение**.\n\n"
-        "📚 Команда `/books` — посмотреть загруженные книги и статус базы знаний.\n"
-        "🔄 Команда `/reset` — начать разбор нового человека или нового вопроса с чистого листа.\n\n"
+        "📚 Команда `/books` — посмотреть загруженные книги.\n"
+        "🔄 Команда `/reset` — сбросить запомненные данные, если хотите разобрать совсем другого человека с нуля.\n\n"
         "*Напишите свой вопрос или просто позовите меня: «Астра»!*"
     )
-    await message.reply(welcome, parse_mode=ParseMode.MARKDOWN)
+    await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("reset"))
@@ -185,9 +223,11 @@ async def cmd_reset(message: Message) -> None:
     store.clear_session(chat_id, user_id)
     store.mark_active(chat_id, user_id)
     await message.reply(
-        "🔄 Контекст предыдущего разбора очищен! Напишите, **о ком или о чём** ваш новый вопрос, "
-        "и укажите дату, время и город.",
-        parse_mode=ParseMode.MARKDOWN,
+        markdown_to_telegram_html(
+            "🔄 Память текущего разбора очищена! Напишите, **о ком или о чём** ваш новый вопрос, "
+            "и укажите дату, время и город."
+        ),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -211,21 +251,19 @@ async def cmd_books(message: Message) -> None:
     else:
         lines.append("\n✅ *Нечитаемых или повреждённых файлов не обнаружено.*")
 
-    lines.append(
-        "\n💡 *Вы можете прямо сюда в чат прислать файл книги (PDF, DOCX, EPUB, FB2, TXT) "
-        "или публичную ссылку на Яндекс.Диск — я сразу скачаю и изучу её!*"
-    )
-    await message.reply("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await message.reply(markdown_to_telegram_html("\n".join(lines)), parse_mode=ParseMode.HTML)
 
 
 @dp.message(F.document)
 async def handle_book_document(message: Message, bot: Bot) -> None:
-    """Allow user to upload astrological books directly in Telegram chat."""
     doc = message.document
     if not doc or not doc.file_name:
         return
     target_path = BOOKS_DIR / doc.file_name
-    status_msg = await message.reply(f"📥 Загружаю и изучаю книгу `{doc.file_name}`...", parse_mode=ParseMode.MARKDOWN)
+    status_msg = await message.reply(
+        markdown_to_telegram_html(f"📥 Загружаю и изучаю книгу `{doc.file_name}`..."),
+        parse_mode=ParseMode.HTML,
+    )
     try:
         file_info = await bot.get_file(doc.file_id)
         await bot.download_file(file_info.file_path, destination=target_path)
@@ -233,18 +271,22 @@ async def handle_book_document(message: Message, bot: Bot) -> None:
         summary = knowledge_base.load_or_build_index()
         if err:
             await status_msg.edit_text(
-                f"⚠️ Я сохранила файл `{doc.file_name}`, но **не смогла его прочитать**:\n"
-                f"Причина: *{err}*\n\nПожалуйста, пришлите текстовую версию (PDF с текстом, DOCX, FB2, EPUB или TXT).",
-                parse_mode=ParseMode.MARKDOWN,
+                markdown_to_telegram_html(
+                    f"⚠️ Я сохранила файл `{doc.file_name}`, но **не смогла его прочитать**:\n"
+                    f"Причина: *{err}*\n\nПожалуйста, пришлите текстовую версию (PDF с текстом, DOCX, FB2, EPUB или TXT)."
+                ),
+                parse_mode=ParseMode.HTML,
             )
         else:
             await status_msg.edit_text(
-                f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Астры!\n"
-                f"Всего фрагментов в базе: **{summary['total_chunks']}**.",
-                parse_mode=ParseMode.MARKDOWN,
+                markdown_to_telegram_html(
+                    f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Астры!\n"
+                    f"Всего фрагментов в базе: **{summary['total_chunks']}**."
+                ),
+                parse_mode=ParseMode.HTML,
             )
     except Exception as exc:
-        await status_msg.edit_text(f"❌ Ошибка при загрузке файла `{doc.file_name}`: {exc}")
+        await status_msg.edit_text(f"❌ Ошибка при загрузке файла {doc.file_name}: {exc}")
 
 
 @dp.message(F.text)
@@ -257,15 +299,17 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     user_id = message.from_user.id if message.from_user else 0
     is_private = message.chat.type == "private"
 
-    # Check if user sent a Yandex.Disk link to download books
     ydisk_match = re.search(r"https?://(?:disk\.yandex\.[a-z]+|yadi\.sk)/\S+", text, re.I)
     if ydisk_match:
         url = ydisk_match.group(0)
-        wait_msg = await message.reply(f"☁️ Обнаружена ссылка на Яндекс.Диск! Скачиваю и проверяю книги...", parse_mode=ParseMode.MARKDOWN)
+        wait_msg = await message.reply(
+            markdown_to_telegram_html("☁️ Обнаружена ссылка на Яндекс.Диск! Скачиваю и проверяю книги..."),
+            parse_mode=ParseMode.HTML,
+        )
         downloaded, dl_errors = await asyncio.to_thread(download_from_yandex_disk, url, BOOKS_DIR)
         summary = await asyncio.to_thread(knowledge_base.load_or_build_index)
         report = [
-            f"📚 **Отчёт по загрузке книг с Яндекс.Диска:**",
+            "📚 **Отчёт по загрузке книг с Яндекс.Диска:**",
             f"• Скачано файлов: **{len(downloaded)}**",
             f"• Всего изучено книг в базе: **{summary['indexed_books_count']}** (фрагментов: **{summary['total_chunks']}**)",
         ]
@@ -276,12 +320,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
                 "\n⚠️ **Книги, которые я НЕ смогла прочитать (нужен OCR или другой формат):**\n"
                 + "\n".join(f"• ❌ `{u['file']}` — {u['reason']}" for u in summary["unreadable_files"])
             )
-        await wait_msg.edit_text("\n".join(report), parse_mode=ParseMode.MARKDOWN)
+        await wait_msg.edit_text(markdown_to_telegram_html("\n".join(report)), parse_mode=ParseMode.HTML)
         return
 
-    # Wake-word detection:
-    # 1. If the message contains "Астра" / "Astra" in any case or language -> wake up immediately!
-    # 2. If in private chat or replying directly to Astra or within an active dialog session -> respond!
     has_wake_word = contains_astra_wake_word(text)
     is_reply_to_bot = bool(
         message.reply_to_message
@@ -293,71 +334,79 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     if not (has_wake_word or is_private or is_reply_to_bot or in_active_session):
         return
 
-    # Mark session active & store user message
     store.mark_active(chat_id, user_id)
     store.add_message(chat_id, user_id, "user", text)
 
-    # Immediately send typing action so the user sees instant response
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # Check if the user ONLY wrote the wake word (e.g., "Астра", "Astra!", "АСТРА привет") without a question yet
+    saved_profile = store.get_profile(chat_id, user_id)
+    history = store.get_history(chat_id, user_id, limit=26)
+
     stripped_without_wake = re.sub(
         r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|астра|astra|άστρα|אסטרה|أسترا|अस्त्रा|[!?,.\s])+",
         "",
         text,
         flags=re.I,
     )
-    history = store.get_history(chat_id, user_id, limit=10)
 
-    if len(stripped_without_wake) < 3 and len(history) <= 2:
+    if len(stripped_without_wake) < 3 and not saved_profile.get("date_str") and len(history) <= 2:
         instant_greeting = (
             "✨ **Я здесь! Астра на связи и внимательно слушает вас.**\n\n"
-            "Расскажите, пожалуйста:\n"
-            "1. **О ком или о чём ваш вопрос?** (ваша натальная карта, карта другого человека, совместимость, прогноз, выбор даты или хорарный вопрос «здесь и сейчас»)\n"
-            "2. **Дата** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`, укажите: по бирке, со слов или ректификация) и **город** рождения (или ваш текущий город для хорара).\n\n"
-            "Как только вы напишете данные, я сразу построю и пришлю фото карты и сделаю полный разбор по всем астрологическим школам!"
+            "Напишите мне один раз:\n"
+            "1. **О ком или о чём ваш вопрос?**\n"
+            "2. **Дата** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`) и **город**.\n\n"
+            "Я **запомню эти данные на всё время нашей беседы**, пришлю фото карты и буду отвечать на любые ваши следующие вопросы без повторных уточнений!"
         )
         store.add_message(chat_id, user_id, "assistant", instant_greeting)
-        await message.reply(instant_greeting, parse_mode=ParseMode.MARKDOWN)
+        await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
         return
 
-    # Analyze dialog completeness (WHO/WHAT, Date, Time, City)
-    analysis = await analyze_dialog_completeness(history)
+    analysis = await analyze_dialog_completeness(history, saved_profile=saved_profile)
+
+    store.update_profile(
+        chat_id,
+        user_id,
+        {
+            "subject_name": analysis.get("subject_name"),
+            "chart_type": analysis.get("chart_type"),
+            "date_str": analysis.get("date_str"),
+            "time_str": analysis.get("time_str"),
+            "place_city": analysis.get("place_city"),
+        },
+    )
 
     if not analysis.get("has_all_required_data"):
         clarification = analysis.get("missing_info_question_ru") or (
-            "✨ **Я на связи!** Чтобы я построила точную карту и ответила без догадок, "
-            "пожалуйста, уточните:\n"
-            "• **О ком или о чём идёт речь?**\n"
-            "• **Дату** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`) и **город**."
+            "✨ Уточните, пожалуйста, недостающие координаты (дату, время или город), чтобы я построила точную карту."
         )
         store.add_message(chat_id, user_id, "assistant", clarification)
-        await message.reply(clarification, parse_mode=ParseMode.MARKDOWN)
+        await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
         return
 
-    # All required data is present! Immediately notify user that calculation & chart rendering started
-    ack_msg = await message.reply(
-        "🔭 **Все данные приняты!** Проверяю геокоординаты, рассчитываю точные эфемериды, "
-        "строю изображение карты и сверяю трактовки по базе астрологических школ...",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    updated_profile = store.get_profile(chat_id, user_id)
+    place_query = updated_profile.get("place_city") or analysis.get("place_city") or "Москва"
+    date_str = updated_profile.get("date_str") or analysis.get("date_str") or "NOW"
+    time_str = updated_profile.get("time_str") or analysis.get("time_str") or "NOW"
+    chart_type = updated_profile.get("chart_type") or analysis.get("chart_type") or "natal"
+    subject_name = updated_profile.get("subject_name") or analysis.get("subject_name") or "Карта"
+    send_photo = bool(analysis.get("send_new_chart_photo", not updated_profile.get("has_rendered_chart")))
 
-    place_query = analysis.get("place_city") or "Москва"
+    ack_text = (
+        "🔭 **Строю карту и готовлю разбор по всем астрологическим школам...**"
+        if send_photo
+        else "🔮 **Анализирую ваш вопрос по вашей сохранённой карте...**"
+    )
+    ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
+
     geo = await asyncio.to_thread(resolve_place, place_query)
     if not geo:
         ask_city_again = (
             f"⚠️ Мне не удалось найти на карте населённый пункт **«{place_query}»**.\n"
-            "Пожалуйста, напишите название города (или ближайшего крупного города и области/страны) чуть точнее!"
+            "Пожалуйста, напишите название города чуть точнее (остальные ваши данные я уже запомнила)!"
         )
         store.add_message(chat_id, user_id, "assistant", ask_city_again)
-        await ack_msg.edit_text(ask_city_again, parse_mode=ParseMode.MARKDOWN)
+        await ack_msg.edit_text(markdown_to_telegram_html(ask_city_again), parse_mode=ParseMode.HTML)
         return
-
-    # Parse date and time
-    date_str = analysis.get("date_str") or "NOW"
-    time_str = analysis.get("time_str") or "NOW"
-    chart_type = analysis.get("chart_type") or "natal"
-    subject_name = analysis.get("subject_name") or "Карта"
 
     try:
         if date_str == "NOW" or time_str == "NOW":
@@ -370,14 +419,12 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             dt_local = datetime.datetime(d_parts[2], d_parts[1], d_parts[0], t_parts[0], t_parts[1])
     except Exception:
         ask_date_again = (
-            "⚠️ Пожалуйста, проверьте корректность даты и времени и напишите их в формате "
-            "`ДД.ММ.ГГГГ ЧЧ:ММ` (например: `15.05.1995 14:30`)."
+            "⚠️ Пожалуйста, проверьте формат даты и времени (`ДД.ММ.ГГГГ ЧЧ:ММ`, например `15.05.1995 14:30`)."
         )
         store.add_message(chat_id, user_id, "assistant", ask_date_again)
-        await ack_msg.edit_text(ask_date_again, parse_mode=ParseMode.MARKDOWN)
+        await ack_msg.edit_text(markdown_to_telegram_html(ask_date_again), parse_mode=ParseMode.HTML)
         return
 
-    # 1. Calculate multi-tradition chart
     chart = await asyncio.to_thread(
         calculate_full_chart,
         dt_local,
@@ -389,25 +436,25 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         chart_type=chart_type,
     )
 
-    # 2. Render chart PNG image and send as photo
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-    img_filename = f"chart_{chat_id}_{int(time.time())}.png"
-    img_path = CHARTS_DIR / img_filename
-    await asyncio.to_thread(render_chart_image, chart, img_path)
+    if send_photo:
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+        img_filename = f"chart_{chat_id}_{int(time.time())}.png"
+        img_path = CHARTS_DIR / img_filename
+        await asyncio.to_thread(render_chart_image, chart, img_path)
 
-    photo_caption = (
-        f"🗺 **Карта: {subject_name}**\n"
-        f"📅 `{chart['dt_local_str']}` | 📍 {place_query} (`{geo.lat:.2f}°N, {geo.lon:.2f}°E`)\n"
-        f"🏛 Дома: {chart['house_system']} (+ сравнение с Полнознаковой) | {chart['hellenistic_medieval']['sect']}\n"
-        f"⬆️ **ASC:** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
-    )
-    await message.reply_photo(
-        photo=FSInputFile(img_path),
-        caption=photo_caption,
-        parse_mode=ParseMode.MARKDOWN,
-    )
+        photo_caption = (
+            f"🗺 **Карта: {subject_name}**\n"
+            f"📅 `{chart['dt_local_str']}` | 📍 {place_query} (`{geo.lat:.2f}°N, {geo.lon:.2f}°E`)\n"
+            f"🏛 Дома: {chart['house_system']} (+ сравнение с Полнознаковой) | {chart['hellenistic_medieval']['sect']}\n"
+            f"⬆️ **ASC:** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
+        )
+        await message.reply_photo(
+            photo=FSInputFile(img_path),
+            caption=markdown_to_telegram_html(photo_caption),
+            parse_mode=ParseMode.HTML,
+        )
+        store.update_profile(chat_id, user_id, {"has_rendered_chart": True})
 
-    # 3. Search authoritative book passages and synthesize full multi-tradition reading
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     user_q = analysis.get("user_question") or text
     search_query = f"{user_q} {chart['asc']['sign']} Солнце {chart['planets'][0]['sign']} Луна {chart['planets'][1]['sign']} {chart_type}"
@@ -417,24 +464,23 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         chart=chart,
         user_question=user_q,
         rag_passages=rag_passages,
+        history_messages=history,
     )
     store.add_message(chat_id, user_id, "assistant", reading)
 
-    # Delete temporary progress message and send full reading
     try:
         await ack_msg.delete()
     except Exception:
         pass
 
-    for part in split_long_telegram_message(reading):
+    for part in split_html_telegram_message(reading):
         try:
-            await message.reply(part, parse_mode=ParseMode.MARKDOWN)
+            await message.reply(part, parse_mode=ParseMode.HTML)
         except Exception:
             await message.reply(part)
 
 
 async def health_handler(request: web.Request) -> web.Response:
-    """HTTP healthcheck endpoint so free cloud platforms (Render / HuggingFace / Railway) keep the container alive 24/7."""
     return web.json_response({
         "status": "ok",
         "bot": "Astra (Астра) Multi-Tradition Astrology Bot",
@@ -460,10 +506,7 @@ async def start_background_web_server() -> web.AppRunner:
 async def main() -> None:
     runner = await start_background_web_server()
     if not TELEGRAM_BOT_TOKEN:
-        logger.warning(
-            "TELEGRAM_BOT_TOKEN is not set in .env yet! "
-            "Health server is running. Set TELEGRAM_BOT_TOKEN to start polling Telegram."
-        )
+        logger.warning("TELEGRAM_BOT_TOKEN is not set in .env yet!")
         while True:
             await asyncio.sleep(3600)
 
