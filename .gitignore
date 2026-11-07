@@ -8,3 +8,6 @@ data/.mplcache/
 arcana_bot/data/spreads/*.png
 arcana_bot/data/*.db
 arcana_bot/data/.mplcache/
+matrix_bot/data/matrices/*.png
+matrix_bot/data/*.db
+matrix_bot/data/.mplcache/

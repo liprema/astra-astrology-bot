@@ -9,7 +9,7 @@ on:
     - cron: '45 */5 * * *'
 
 concurrency:
-  group: astra-and-arcana-bots-live
+  group: astra-arcana-matrix-bots-live
   cancel-in-progress: true
 
 jobs:
@@ -33,18 +33,21 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Astra (Astrology) & Arcana (Tarot) Bots 24/7 in parallel
+      - name: Run Astra (Astrology), Arcana (Tarot) & Matrix (Numerology) Bots 24/7 in parallel
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TAROT_BOT_TOKEN: ${{ secrets.TAROT_BOT_TOKEN }}
+          MATRIX_BOT_TOKEN: ${{ secrets.MATRIX_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           PORT=7860 python -m bot.main &
           ASTRA_PID=$!
-          cd arcana_bot && PORT=7861 python -m bot.main &
+          (cd arcana_bot && PORT=7861 python -m bot.main) &
           ARCANA_PID=$!
+          (cd matrix_bot && PORT=7862 python -m bot.main) &
+          MATRIX_PID=$!
           sleep 20400 || true
-          kill $ASTRA_PID $ARCANA_PID 2>/dev/null || true
+          kill $ASTRA_PID $ARCANA_PID $MATRIX_PID 2>/dev/null || true
 
       - name: Trigger seamless continuation run
         if: always()
