@@ -38,7 +38,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     contains_astra_wake_word,
 )
-from bot.formatter import markdown_to_telegram_html, split_html_telegram_message
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
 from bot.llm_astrologer import analyze_dialog_completeness, generate_astrological_interpretation
 
@@ -324,14 +324,32 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     has_wake_word = contains_astra_wake_word(text)
-    is_reply_to_bot = bool(
+    mentions_other_bot = bool(
+        re.search(r"(?:аркан[аеуойы]|arcana|arkana|матрикс[ауеом]?|матриц[аеуейы]|matrix)", text, re.I)
+    )
+    is_reply_to_this_bot = bool(
         message.reply_to_message
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.is_bot
+        and message.reply_to_message.from_user.id == bot.id
     )
-    in_active_session = store.is_recently_active(chat_id, user_id)
+    saved_profile = store.get_profile(chat_id, user_id)
+    # In group chats, auto-continue without wake word only if the user is answering a pending data question (within 15 min)
+    awaiting_data_in_group = (
+        not is_private
+        and store.is_recently_active(chat_id, user_id, ttl_seconds=900)
+        and not saved_profile.get("date_str")
+        and bool(re.search(r"(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{1,2}[:.]\d{2}|москв|петербург|спб|екатеринбург|казан|новосибирск|краснодар|сочи|минск|алмат|киев|ташкент|баку|ереван|тбилис|варшав|берлин|лондон|париж|дубай)", text, re.I))
+    )
 
-    if not (has_wake_word or is_private or is_reply_to_bot or in_active_session):
+    if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
+        return
+
+    if is_private:
+        should_respond = True
+    else:
+        should_respond = has_wake_word or is_reply_to_this_bot or awaiting_data_in_group
+
+    if not should_respond:
         return
 
     store.mark_active(chat_id, user_id)
@@ -339,7 +357,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    saved_profile = store.get_profile(chat_id, user_id)
     history = store.get_history(chat_id, user_id, limit=26)
 
     stripped_without_wake = re.sub(
@@ -351,11 +368,11 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if len(stripped_without_wake) < 3 and not saved_profile.get("date_str") and len(history) <= 2:
         instant_greeting = (
-            "✨ **Я здесь! Астра на связи и внимательно слушает вас.**\n\n"
-            "Напишите мне один раз:\n"
-            "1. **О ком или о чём ваш вопрос?**\n"
-            "2. **Дата** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`) и **город**.\n\n"
-            "Я **запомню эти данные на всё время нашей беседы**, пришлю фото карты и буду отвечать на любые ваши следующие вопросы без повторных уточнений!"
+            "✨ **Привет! Я здесь — это Астра.**\n\n"
+            "С радостью построю вашу натальную карту или посмотрю хорарный вопрос! Напишите мне один раз:\n"
+            "• **О ком или о чём мы смотрим карту?**\n"
+            "• **Дату рождения** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`) и **город**.\n\n"
+            "*Я бережно сохраню ваши данные в памяти — повторять их в следующих вопросах уже не придётся!*"
         )
         store.add_message(chat_id, user_id, "assistant", instant_greeting)
         await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
@@ -377,7 +394,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data"):
         clarification = analysis.get("missing_info_question_ru") or (
-            "✨ Уточните, пожалуйста, недостающие координаты (дату, время или город), чтобы я построила точную карту."
+            "✨ Подскажите, пожалуйста, недостающие координаты (дату, точное время или город), чтобы я могла построить карту."
         )
         store.add_message(chat_id, user_id, "assistant", clarification)
         await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
@@ -392,17 +409,17 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     send_photo = bool(analysis.get("send_new_chart_photo", not updated_profile.get("has_rendered_chart")))
 
     ack_text = (
-        "🔭 **Строю карту и готовлю разбор по всем астрологическим школам...**"
+        "🔭 *Строю вашу натальную карту и сверяю показатели по астрологическим школам...*"
         if send_photo
-        else "🔮 **Анализирую ваш вопрос по вашей сохранённой карте...**"
+        else "✨ *Открываю вашу сохранённую карту и смотрю ответ на вопрос...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
     geo = await asyncio.to_thread(resolve_place, place_query)
     if not geo:
         ask_city_again = (
-            f"⚠️ Мне не удалось найти на карте населённый пункт **«{place_query}»**.\n"
-            "Пожалуйста, напишите название города чуть точнее (остальные ваши данные я уже запомнила)!"
+            f"⚠️ Мне не удалось найти на карте город **«{place_query}»**.\n"
+            "Напишите, пожалуйста, название города чуть точнее (дату и время я уже запомнила)!"
         )
         store.add_message(chat_id, user_id, "assistant", ask_city_again)
         await ack_msg.edit_text(markdown_to_telegram_html(ask_city_again), parse_mode=ParseMode.HTML)
@@ -443,10 +460,10 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         await asyncio.to_thread(render_chart_image, chart, img_path)
 
         photo_caption = (
-            f"🗺 **Карта: {subject_name}**\n"
-            f"📅 `{chart['dt_local_str']}` | 📍 {place_query} (`{geo.lat:.2f}°N, {geo.lon:.2f}°E`)\n"
-            f"🏛 Дома: {chart['house_system']} (+ сравнение с Полнознаковой) | {chart['hellenistic_medieval']['sect']}\n"
-            f"⬆️ **ASC:** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
+            f"✨ **Натальная карта: {subject_name}**\n"
+            f"📅 `{chart['dt_local_str']}` • 📍 {place_query}\n"
+            f"🏛 Дома: {chart['house_system']} + Полнознаковая система | {chart['hellenistic_medieval']['sect']}\n"
+            f"⬆️ **Асцендент (ASC):** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
         )
         await message.reply_photo(
             photo=FSInputFile(img_path),
@@ -477,7 +494,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         try:
             await message.reply(part, parse_mode=ParseMode.HTML)
         except Exception:
-            await message.reply(part)
+            await message.reply(strip_html_tags(part))
 
 
 async def health_handler(request: web.Request) -> web.Response:

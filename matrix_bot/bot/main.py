@@ -35,7 +35,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     contains_matrix_wake_word,
 )
-from bot.formatter import markdown_to_telegram_html, split_html_telegram_message
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
 from bot.llm_numerology import analyze_matrix_dialog_completeness, generate_numerology_interpretation
 from bot.matrix_renderer import render_numerology_image
@@ -175,8 +175,8 @@ async def cmd_start(message: Message) -> None:
     store.mark_active(chat_id, user_id)
 
     welcome = (
-        "🔢 **Приветствую! Я — Матрица (Matrix), ваш автономный нумеролог-эксперт всех школ нумерологии.**\n\n"
-        "Я мгновенно откликаюсь на имя **«Матрица»** / **«Matrix»** и **помню весь наш диалог и ваши данные рождения**, "
+        "🔢 **Приветствую! Я — Матрикс (Матрица / Matrix), ваш автономный нумеролог-эксперт всех школ нумерологии.**\n\n"
+        "Я мгновенно откликаюсь на имя **«Матрикс»** / **«Матрица»** / **«Matrix»** и **помню весь наш диалог и ваши данные рождения**, "
         "поэтому вам никогда не придётся писать одно и то же дважды!\n\n"
         "🔮 **В каких школах и системах я рассчитываю:**\n"
         "• **Классический Психоматрикс (Квадрат Пифагора — А. Ф. Александров + Система «Идеал» Н. Сидоровой)**.\n"
@@ -186,7 +186,7 @@ async def cmd_start(message: Message) -> None:
         "• **Прогностика** (Персональный год, месяц, день, 4 Пика и 4 Вызова жизни) и совместимость пар.\n\n"
         "📚 Команда `/books` — посмотреть загруженные книги по нумерологии.\n"
         "🔄 Команда `/reset` — очистить память для расчёта нового человека с нуля.\n\n"
-        "*Напишите свой вопрос или просто позовите меня: «Матрица»!*"
+        "*Напишите свой вопрос или просто позовите меня: «Матрикс»!*"
     )
     await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
@@ -209,7 +209,7 @@ async def cmd_reset(message: Message) -> None:
 async def cmd_books(message: Message) -> None:
     summary = knowledge_base.load_or_build_index()
     lines = [
-        "📚 **БАЗА КНИГ ПО НУМЕРОЛОГИИ (МАТРИЦА)**",
+        "📚 **БАЗА КНИГ ПО НУМЕРОЛОГИИ (МАТРИКС)**",
         f"• Проиндексировано книг пользователя: **{summary['indexed_books_count']}**",
         f"• Всего смысловых фрагментов (включая канонический свод школ Нумерологии): **{summary['total_chunks']}**",
     ]
@@ -254,7 +254,7 @@ async def handle_book_document(message: Message, bot: Bot) -> None:
         else:
             await status_msg.edit_text(
                 markdown_to_telegram_html(
-                    f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Матрицы!\n"
+                    f"✅ Книга `{doc.file_name}` успешно изучена и добавлена в базу знаний Матрикса!\n"
                     f"Всего фрагментов в базе: **{summary['total_chunks']}**."
                 ),
                 parse_mode=ParseMode.HTML,
@@ -298,14 +298,31 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     has_wake_word = contains_matrix_wake_word(text)
-    is_reply_to_bot = bool(
+    mentions_other_bot = bool(
+        re.search(r"(?:астр[аеуойы]|astra|аркан[аеуойы]|arcana|arkana)", text, re.I)
+    )
+    is_reply_to_this_bot = bool(
         message.reply_to_message
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.is_bot
+        and message.reply_to_message.from_user.id == bot.id
     )
-    in_active_session = store.is_recently_active(chat_id, user_id)
+    saved_profile = store.get_profile(chat_id, user_id)
+    awaiting_date_in_group = (
+        not is_private
+        and store.is_recently_active(chat_id, user_id, ttl_seconds=900)
+        and not saved_profile.get("date_str")
+        and bool(re.search(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b", text))
+    )
 
-    if not (has_wake_word or is_private or is_reply_to_bot or in_active_session):
+    if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
+        return
+
+    if is_private:
+        should_respond = True
+    else:
+        should_respond = has_wake_word or is_reply_to_this_bot or awaiting_date_in_group
+
+    if not should_respond:
         return
 
     store.mark_active(chat_id, user_id)
@@ -313,11 +330,10 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    saved_profile = store.get_profile(chat_id, user_id)
     history = store.get_history(chat_id, user_id, limit=26)
 
     stripped_without_wake = re.sub(
-        r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|матрикс|матрикса|матриксу|матриксом|матрица|матрицу|матрице|матрицей|matrix|matriks|μάτριξ|מטריקס|ماتريكس|मैट्रिक्स|[!?,.\s])+",
+        r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|матрикс|матрикса|матриксу|матриксом|матриксе|матрица|матрицу|матрице|матрицей|matrix|matriks|μάτριξ|מטריקס|ماتريكس|मैट्रिक्स|[!?,.\s])+",
         "",
         text,
         flags=re.I,
@@ -325,11 +341,11 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if len(stripped_without_wake) < 3 and not saved_profile.get("date_str") and len(history) <= 2:
         instant_greeting = (
-            "🔢 **Я здесь! Матрикс на связи и готов к нумерологическому расчёту.**\n\n"
-            "Напишите мне один раз:\n"
-            "1. **О ком или о чём ваш вопрос?** (личный разбор, деньги и профессия, кармический хвост, прогноз на год или совместимость пары).\n"
-            "2. **Дату рождения** (`ДД.ММ.ГГГГ`) и **Имя / ФИО**.\n\n"
-            "Я **запомню ваши данные на всю беседу**, построю и пришлю фото вашего **Квадрата Пифагора + Октаграммы Матрицы Судьбы (22 аркана)** и отвечу на любые ваши вопросы по всем школам нумерологии!"
+            "🔢 **Привет! Я здесь — это Матрикс.**\n\n"
+            "С радостью построю ваш Квадрат Пифагора и Октаграмму Матрицы Судьбы (22 аркана)! Напишите мне один раз:\n"
+            "• **О ком или о чём мы делаем расчёт?** (личный разбор, деньги и призвание, кармический хвост, прогноз на год или совместимость пары).\n"
+            "• **Дату рождения** (`ДД.ММ.ГГГГ`) и **Имя / ФИО**.\n\n"
+            "*Я запомню ваши данные на всю беседу, пришлю иллюстрацию матрицы и отвечу на любые следующие вопросы!*"
         )
         store.add_message(chat_id, user_id, "assistant", instant_greeting)
         await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
@@ -350,7 +366,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data"):
         clarification = analysis.get("missing_info_question_ru") or (
-            "🔢 Уточните, пожалуйста, **о ком речь** и **дату рождения (`ДД.ММ.ГГГГ`)**, чтобы я построила Квадрат Пифагора и Матрицу Судьбы!"
+            "🔢 Подскажите, пожалуйста, **о ком речь** и **дату рождения (`ДД.ММ.ГГГГ`)**, чтобы я рассчитал Квадрат Пифагора и Матрицу Судьбы!"
         )
         store.add_message(chat_id, user_id, "assistant", clarification)
         await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
@@ -381,9 +397,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             partner_tuple = None
 
     ack_text = (
-        "🔢 **Рассчитываю Квадрат Пифагора, Октаграмму Матрицы Судьбы (22 аркана), Ведический и Западный коды...**"
+        "🔢 *Строю Квадрат Пифагора, Октаграмму Матрицы Судьбы (22 аркана) и сверяю нумерологические школы...*"
         if send_photo
-        else "🔮 **Обращаюсь к вашей сохранённой Матрице и анализирую вопрос...**"
+        else "🔮 *Открываю вашу сохранённую Матрицу и смотрю ответ на вопрос...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
@@ -407,11 +423,11 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         w = num_data["western"]
         v = num_data["vedic"]
         photo_caption = (
-            f"🔢 **Матрица и Квадрат Пифагора: {subject_label} ({num_data['date_str']})**\n"
-            f"🌟 **ЧЖП:** {w['life_path']} | **Финансовый код:** `{w['financial_code']}`\n"
+            f"🔢 **Нумерологическая Матрица: {subject_label} ({num_data['date_str']})**\n"
+            f"🌟 **ЧЖП:** {w['life_path']} • **Финансовый код:** `{w['financial_code']}`\n"
             f"💎 **Центр Матрицы Судьбы:** {ARCANA_22_NAMES[dm['center_comfort_zone']]}\n"
-            f"🧬 **Кармический хвост:** `{dm['karmic_tail']}` | **Денежный канал:** `{dm['money_channel']}`\n"
-            f"🕉 **Ведическая Санкхья:** Число Души {v['soul_number']} ({v['soul_planet']}), Судьбы {v['destiny_number']} ({v['destiny_planet']})"
+            f"🧬 **Кармический хвост:** `{dm['karmic_tail']}` • **Денежный канал:** `{dm['money_channel']}`\n"
+            f"🕉 **Ведическая Санкхья:** Душа {v['soul_number']} ({v['soul_planet']}), Судьба {v['destiny_number']} ({v['destiny_planet']})"
         )
         await message.reply_photo(
             photo=FSInputFile(img_path),
@@ -442,7 +458,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         try:
             await message.reply(part, parse_mode=ParseMode.HTML)
         except Exception:
-            await message.reply(part)
+            await message.reply(strip_html_tags(part))
 
 
 async def health_handler(request: web.Request) -> web.Response:

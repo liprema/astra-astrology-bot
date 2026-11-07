@@ -36,7 +36,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     contains_arcana_wake_word,
 )
-from bot.formatter import markdown_to_telegram_html, split_html_telegram_message
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
 from bot.llm_tarot import analyze_tarot_dialog_completeness, generate_tarot_interpretation
 from bot.spread_renderer import render_spread_image
@@ -298,14 +298,25 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     has_wake_word = contains_arcana_wake_word(text)
-    is_reply_to_bot = bool(
+    mentions_other_bot = bool(
+        re.search(r"(?:астр[аеуойы]|astra|матрикс[ауеом]?|матриц[аеуейы]|matrix)", text, re.I)
+    )
+    is_reply_to_this_bot = bool(
         message.reply_to_message
         and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.is_bot
+        and message.reply_to_message.from_user.id == bot.id
     )
-    in_active_session = store.is_recently_active(chat_id, user_id)
+    saved_profile = store.get_profile(chat_id, user_id)
 
-    if not (has_wake_word or is_private or is_reply_to_bot or in_active_session):
+    if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
+        return
+
+    if is_private:
+        should_respond = True
+    else:
+        should_respond = has_wake_word or is_reply_to_this_bot
+
+    if not should_respond:
         return
 
     store.mark_active(chat_id, user_id)
@@ -313,7 +324,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    saved_profile = store.get_profile(chat_id, user_id)
     history = store.get_history(chat_id, user_id, limit=26)
 
     stripped_without_wake = re.sub(
@@ -325,11 +335,11 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if len(stripped_without_wake) < 3 and not saved_profile.get("last_spread") and len(history) <= 2:
         instant_greeting = (
-            "🃏 **Я здесь! Аркана на связи и готова к работе с колодой.**\n\n"
-            "Напишите мне один раз:\n"
-            "1. **О ком или о чём ваш вопрос?** (имена/роли, сфера, сроки).\n"
-            "2. **Как делаем расклад?** Вытянуть ли карты мне самой (*Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт* или *1 карта + Дно колоды*) — или разобрать ваши выпавшие карты?\n\n"
-            "Я **запомню весь контекст нашей беседы**, пришлю фотографию расклада и смогу отвечать на любые ваши уточняющие вопросы!"
+            "🃏 **Привет! Я здесь — это Аркана.**\n\n"
+            "С удовольствием разложу для вас карты! Напишите мне своими словами:\n"
+            "• **О ком или о чём вы хотите спросить колоду?** (отношения, работа, финансы, выбор или перспектива).\n"
+            "• **Какой расклад сделаем?** (*Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт*, *1 карта + Дно колоды* — или разберём ваши выпавшие карты).\n\n"
+            "*Я запомню весь наш разговор, пришлю иллюстрацию расклада и смогу отвечать на любые уточняющие вопросы!*"
         )
         store.add_message(chat_id, user_id, "assistant", instant_greeting)
         await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
@@ -348,7 +358,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data"):
         clarification = analysis.get("missing_info_question_ru") or (
-            "🃏 Уточните, пожалуйста, **о ком или о чём именно вопрос**, чтобы я настроилась на расклад!"
+            "🃏 Расскажите чуть подробнее, **о ком или о чём именно вопрос**, чтобы я настроилась на расклад!"
         )
         store.add_message(chat_id, user_id, "assistant", clarification)
         await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
@@ -365,9 +375,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     draw_new = bool(analysis.get("draw_new_spread", True)) or not updated_profile.get("last_spread")
 
     ack_text = (
-        "🕯 **Тасую колоду, выкладываю арканы, фиксирую Дно колоды и рассчитываю Квинтэссенцию...**"
+        "🕯 *Тасую колоду, выкладываю арканы, смотрю Дно колоды и считаю Квинтэссенцию...*"
         if draw_new
-        else "🃏 **Обращаюсь к вашему текущему раскладу и раскрываю детали...**"
+        else "🃏 *Обращаюсь к вашему раскладу и смотрю ответ на вопрос...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
@@ -387,7 +397,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         img_path = SPREADS_DIR / img_filename
         await asyncio.to_thread(render_spread_image, spread, img_path)
 
-        cards_brief = " | ".join(
+        cards_brief = " • ".join(
             f"{c['position_index']}. {c['name_ru']} ({'⟲' if c['is_reversed'] else '↑'})"
             for c in spread["cards"][:5]
         )
@@ -396,8 +406,8 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
         photo_caption = (
             f"🃏 **{spread['spread_title']}**\n"
-            f"🎯 *О ком/чём:* {subject_name}\n"
-            f"🎴 *Карты:* {cards_brief}\n"
+            f"🎯 *Запрос:* {subject_name}\n"
+            f"🎴 *Выпавшие карты:* {cards_brief}\n"
             f"🌊 *Дно колоды (скрытый мотив):* **[{bot_card['roman']}] {bot_card['name_ru']}** ({bot_card['orientation_ru']})\n"
             f"✨ *Квинтэссенция (Совет):* **[{q_card['roman']}] {q_card['name_ru']}**"
         )
@@ -430,7 +440,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         try:
             await message.reply(part, parse_mode=ParseMode.HTML)
         except Exception:
-            await message.reply(part)
+            await message.reply(strip_html_tags(part))
 
 
 async def health_handler(request: web.Request) -> web.Response:
