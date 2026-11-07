@@ -9,11 +9,11 @@ on:
     - cron: '45 */5 * * *'
 
 concurrency:
-  group: astra-telegram-bot-live
+  group: astra-and-arcana-bots-live
   cancel-in-progress: true
 
 jobs:
-  run-astra-bot:
+  run-bots:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
@@ -33,13 +33,18 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Astra Bot (for 5h 40m then seamlessly hand over to next run)
+      - name: Run Astra (Astrology) & Arcana (Tarot) Bots 24/7 in parallel
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TAROT_BOT_TOKEN: ${{ secrets.TAROT_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PORT: "7860"
         run: |
-          timeout 20400 python -m bot.main || true
+          PORT=7860 python -m bot.main &
+          ASTRA_PID=$!
+          cd arcana_bot && PORT=7861 python -m bot.main &
+          ARCANA_PID=$!
+          sleep 20400 || true
+          kill $ASTRA_PID $ARCANA_PID 2>/dev/null || true
 
       - name: Trigger seamless continuation run
         if: always()

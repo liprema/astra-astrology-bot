@@ -5,3 +5,6 @@ __pycache__/
 data/charts/*.png
 data/*.db
 data/.mplcache/
+arcana_bot/data/spreads/*.png
+arcana_bot/data/*.db
+arcana_bot/data/.mplcache/
