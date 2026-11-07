@@ -37,7 +37,11 @@ from bot.config import (
 )
 from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
-from bot.llm_numerology import analyze_matrix_dialog_completeness, generate_numerology_interpretation
+from bot.llm_numerology import (
+    analyze_matrix_dialog_completeness,
+    generate_matrix_chat_response,
+    generate_numerology_interpretation,
+)
 from bot.matrix_renderer import render_numerology_image
 from bot.numerology_engine import ARCANA_22_NAMES, calculate_full_numerology
 
@@ -175,18 +179,13 @@ async def cmd_start(message: Message) -> None:
     store.mark_active(chat_id, user_id)
 
     welcome = (
-        "🔢 **Приветствую! Я — Матрикс (Матрица / Matrix), ваш автономный нумеролог-эксперт всех школ нумерологии.**\n\n"
-        "Я мгновенно откликаюсь на имя **«Матрикс»** / **«Матрица»** / **«Matrix»** и **помню весь наш диалог и ваши данные рождения**, "
-        "поэтому вам никогда не придётся писать одно и то же дважды!\n\n"
-        "🔮 **В каких школах и системах я рассчитываю:**\n"
-        "• **Классический Психоматрикс (Квадрат Пифагора — А. Ф. Александров + Система «Идеал» Н. Сидоровой)**.\n"
-        "• **Матрица Судьбы (22 энергии Н. Ладини + Кармическая нумерология Джулии По)** — зона комфорта, кармический хвост, денежный и любовный каналы, 3 предназначения, родовые квадраты.\n"
-        "• **Западная Пифагорейская и Халдейская нумерология** (Число Жизненного Пути, Мастер-числа 11/22/33, Кармические долги, код имени, Финансовый код изобилия).\n"
-        "• **Ведическая нумерология (Санкхья-шастра)** — Число Души (Муланк), Число Дхармы (Бхагьянк) и планеты Джйотиш.\n"
-        "• **Прогностика** (Персональный год, месяц, день, 4 Пика и 4 Вызова жизни) и совместимость пар.\n\n"
-        "📚 Команда `/books` — посмотреть загруженные книги по нумерологии.\n"
-        "🔄 Команда `/reset` — очистить память для расчёта нового человека с нуля.\n\n"
-        "*Напишите свой вопрос или просто позовите меня: «Матрикс»!*"
+        "🔢 **О-о-о, привет! Я — Матрикс (Матрица), твоя немного безумная подруга-нумеролог и взломщица кодов Вселенной!**\n\n"
+        "Со мной можно болтать о странных совпадениях на часах (`11:11`, `22:22`), деньгах, карме и сбоях в матрице реальности, "
+        "а можно кинуть мне дату рождения — и я разберу твой код сразу по 6 школам: Квадрат Пифагора, 22 Аркана Матрицы Судьбы, Финансовый код, Халдейская нумерология имени и Ведическая Санкхья-шастра!\n\n"
+        "Я мгновенно откликаюсь на имя **«Матрикс»** или **«Матрица»** и **помню весь наш разговор и твои цифры**.\n\n"
+        "• Хочешь просто поболтать или узнать, почему тебя преследует какое-то число? Зови меня!\n"
+        "• Хочешь увидеть винтажный постер своей Матрицы и Квадрата Пифагора? Напиши дату рождения (`ДД.ММ.ГГГГ`) и имя.\n"
+        "• `/reset` — обнулить матрицу и взломать код нового человека."
     )
     await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
@@ -199,7 +198,7 @@ async def cmd_reset(message: Message) -> None:
     store.mark_active(chat_id, user_id)
     await message.reply(
         markdown_to_telegram_html(
-            "🔄 Память предыдущего расчёта очищена! Напишите, **о ком или о чём** ваш новый вопрос, и укажите дату рождения и имя."
+            "🔢 Бабах! Матрица обнулена, калькулятор дымится от нетерпения! Чью дату рождения взламываем теперь?"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -332,25 +331,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     history = store.get_history(chat_id, user_id, limit=26)
 
-    stripped_without_wake = re.sub(
-        r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|матрикс|матрикса|матриксу|матриксом|матриксе|матрица|матрицу|матрице|матрицей|matrix|matriks|μάτριξ|מטריקס|ماتريكس|मैट्रिक्स|[!?,.\s])+",
-        "",
-        text,
-        flags=re.I,
-    )
-
-    if len(stripped_without_wake) < 3 and not saved_profile.get("date_str") and len(history) <= 2:
-        instant_greeting = (
-            "🔢 **Привет! Я здесь — это Матрикс.**\n\n"
-            "С радостью построю ваш Квадрат Пифагора и Октаграмму Матрицы Судьбы (22 аркана)! Напишите мне один раз:\n"
-            "• **О ком или о чём мы делаем расчёт?** (личный разбор, деньги и призвание, кармический хвост, прогноз на год или совместимость пары).\n"
-            "• **Дату рождения** (`ДД.ММ.ГГГГ`) и **Имя / ФИО**.\n\n"
-            "*Я запомню ваши данные на всю беседу, пришлю иллюстрацию матрицы и отвечу на любые следующие вопросы!*"
-        )
-        store.add_message(chat_id, user_id, "assistant", instant_greeting)
-        await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
-        return
-
     analysis = await analyze_matrix_dialog_completeness(history, saved_profile=saved_profile)
 
     store.update_profile(
@@ -364,15 +344,23 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         },
     )
 
-    if not analysis.get("has_all_required_data"):
-        clarification = analysis.get("missing_info_question_ru") or (
-            "🔢 Подскажите, пожалуйста, **о ком речь** и **дату рождения (`ДД.ММ.ГГГГ`)**, чтобы я рассчитал Квадрат Пифагора и Матрицу Судьбы!"
+    updated_profile = store.get_profile(chat_id, user_id)
+
+    if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
+        chat_reply = await generate_matrix_chat_response(
+            user_message=text,
+            history_messages=history,
+            saved_profile=updated_profile,
+            missing_info_hint=analysis.get("missing_info_question_ru") or "",
         )
-        store.add_message(chat_id, user_id, "assistant", clarification)
-        await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
+        store.add_message(chat_id, user_id, "assistant", chat_reply)
+        for part in split_html_telegram_message(chat_reply):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
         return
 
-    updated_profile = store.get_profile(chat_id, user_id)
     date_str = updated_profile.get("date_str") or analysis.get("date_str")
     partner_date_str = updated_profile.get("partner_date_str") or analysis.get("partner_date_str")
     full_name = updated_profile.get("full_name") or analysis.get("full_name") or ""
@@ -383,7 +371,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         d_parts = [int(x) for x in re.split(r"[./-]", date_str)]
         day, month, year = d_parts[0], d_parts[1], d_parts[2]
     except Exception:
-        ask_date_again = "⚠️ Пожалуйста, напишите дату рождения в формате `ДД.ММ.ГГГГ` (например: `15.05.1995`)."
+        ask_date_again = "🔢 Стой-стой-стой, у меня цифры разбежались! Напиши дату рождения в формате `ДД.ММ.ГГГГ` (например: `15.05.1995`), чтобы я взломала твой код!"
         store.add_message(chat_id, user_id, "assistant", ask_date_again)
         await message.reply(markdown_to_telegram_html(ask_date_again), parse_mode=ParseMode.HTML)
         return
@@ -397,9 +385,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             partner_tuple = None
 
     ack_text = (
-        "🔢 *Строю Квадрат Пифагора, Октаграмму Матрицы Судьбы (22 аркана) и сверяю нумерологические школы...*"
+        "🔢 *Держите меня семеро — взламываю твой Квадрат Пифагора и Октаграмму Матрицы Судьбы!..*"
         if send_photo
-        else "🔮 *Открываю вашу сохранённую Матрицу и смотрю ответ на вопрос...*"
+        else "🔮 *Заглядываю в твою числовую Матрицу...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
@@ -446,6 +434,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         user_question=user_q,
         rag_passages=rag_passages,
         history_messages=history,
+        is_followup=(not send_photo),
     )
     store.add_message(chat_id, user_id, "assistant", reading)
 

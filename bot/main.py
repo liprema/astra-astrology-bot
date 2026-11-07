@@ -40,7 +40,11 @@ from bot.config import (
 )
 from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
-from bot.llm_astrologer import analyze_dialog_completeness, generate_astrological_interpretation
+from bot.llm_astrologer import (
+    analyze_dialog_completeness,
+    generate_astra_chat_response,
+    generate_astrological_interpretation,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("astra_bot")
@@ -201,17 +205,13 @@ async def cmd_start(message: Message) -> None:
     store.mark_active(chat_id, user_id)
 
     welcome = (
-        "✨ **Приветствую! Я — Астра (Astra), ваш автономный астролог-эксперт.**\n\n"
-        "Я откликаюсь в любой момент, как только вы напишете моё имя **«Астра»** / **«Astra»**, "
-        "и **помню весь наш диалог и ваши данные рождения**, чтобы вам никогда не приходилось писать одно и то же дважды!\n\n"
-        "🔮 **В каких направлениях я работаю:**\n"
-        "• **Западная классическая и современная астрология** (натал, транзиты, соляры, прогрессии, синастрия, релокация/астрокартография, мунданная).\n"
-        "• **Хорарная и Элективная астрология** (У. Лилли и Дж. Фроули, дома Региомонтануса).\n"
-        "• **Эллинистическая и Средневековая традиция** (секта карты, полнознаковые дома, Жребии Фортуны и Духа, годовые профекции, фирдары).\n"
-        "• **Ураническая (Гамбургская школа), Гелиоцентрическая, Кармическая астрология и Формула Души** (8 транснептунов, мидпойнты, цепочки диспозиторов).\n\n"
-        "📚 Команда `/books` — посмотреть загруженные книги.\n"
-        "🔄 Команда `/reset` — сбросить запомненные данные, если хотите разобрать совсем другого человека с нуля.\n\n"
-        "*Напишите свой вопрос или просто позовите меня: «Астра»!*"
+        "✨ **Привет, моя хорошая! Я — Астра.**\n\n"
+        "Со мной можно просто поболтать по душам о жизни, любви, странных совпадениях и капризах знаков зодиака, "
+        "а можно заглянуть в твоё личное небо — я строю натальные и хорарные карты с астрономической точностью и читаю их сразу через оптику классической, психологической, эллинистической, уранической школ и Формулы Души.\n\n"
+        "Я откликаюсь, как только ты позовёшь меня по имени **«Астра»**, и **бережно помню весь наш разговор и твои данные рождения**.\n\n"
+        "• Хочешь просто поговорить или обсудить чей-то характер? Зови меня!\n"
+        "• Хочешь увидеть свою винтажную натальную карту? Напиши один раз дату (`ДД.ММ.ГГГГ`), время (`ЧЧ:ММ`) и город рождения.\n"
+        "• `/reset` — если захочешь очистить память и разобрать карту совсем другого человека."
     )
     await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
@@ -224,8 +224,7 @@ async def cmd_reset(message: Message) -> None:
     store.mark_active(chat_id, user_id)
     await message.reply(
         markdown_to_telegram_html(
-            "🔄 Память текущего разбора очищена! Напишите, **о ком или о чём** ваш новый вопрос, "
-            "и укажите дату, время и город."
+            "✨ Чистый лист! Я бережно отпустила прошлую карту. О ком поговорим или чьё небо посмотрим теперь?"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -359,25 +358,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     history = store.get_history(chat_id, user_id, limit=26)
 
-    stripped_without_wake = re.sub(
-        r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|астра|astra|άστρα|אסטרה|أسترا|अस्त्रा|[!?,.\s])+",
-        "",
-        text,
-        flags=re.I,
-    )
-
-    if len(stripped_without_wake) < 3 and not saved_profile.get("date_str") and len(history) <= 2:
-        instant_greeting = (
-            "✨ **Привет! Я здесь — это Астра.**\n\n"
-            "С радостью построю вашу натальную карту или посмотрю хорарный вопрос! Напишите мне один раз:\n"
-            "• **О ком или о чём мы смотрим карту?**\n"
-            "• **Дату рождения** (`ДД.ММ.ГГГГ`), **точное время** (`ЧЧ:ММ`) и **город**.\n\n"
-            "*Я бережно сохраню ваши данные в памяти — повторять их в следующих вопросах уже не придётся!*"
-        )
-        store.add_message(chat_id, user_id, "assistant", instant_greeting)
-        await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
-        return
-
     analysis = await analyze_dialog_completeness(history, saved_profile=saved_profile)
 
     store.update_profile(
@@ -392,15 +372,23 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         },
     )
 
-    if not analysis.get("has_all_required_data"):
-        clarification = analysis.get("missing_info_question_ru") or (
-            "✨ Подскажите, пожалуйста, недостающие координаты (дату, точное время или город), чтобы я могла построить карту."
+    updated_profile = store.get_profile(chat_id, user_id)
+
+    if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
+        chat_reply = await generate_astra_chat_response(
+            user_message=text,
+            history_messages=history,
+            saved_profile=updated_profile,
+            missing_info_hint=analysis.get("missing_info_question_ru") or "",
         )
-        store.add_message(chat_id, user_id, "assistant", clarification)
-        await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
+        store.add_message(chat_id, user_id, "assistant", chat_reply)
+        for part in split_html_telegram_message(chat_reply):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
         return
 
-    updated_profile = store.get_profile(chat_id, user_id)
     place_query = updated_profile.get("place_city") or analysis.get("place_city") or "Москва"
     date_str = updated_profile.get("date_str") or analysis.get("date_str") or "NOW"
     time_str = updated_profile.get("time_str") or analysis.get("time_str") or "NOW"
@@ -409,17 +397,17 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     send_photo = bool(analysis.get("send_new_chart_photo", not updated_profile.get("has_rendered_chart")))
 
     ack_text = (
-        "🔭 *Строю вашу натальную карту и сверяю показатели по астрологическим школам...*"
+        "🔭 *Минутку, моя хорошая — открываю твоё небо и сверяю показатели по астрологическим школам...*"
         if send_photo
-        else "✨ *Открываю вашу сохранённую карту и смотрю ответ на вопрос...*"
+        else "✨ *Заглядываю в твою карту...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
     geo = await asyncio.to_thread(resolve_place, place_query)
     if not geo:
         ask_city_again = (
-            f"⚠️ Мне не удалось найти на карте город **«{place_query}»**.\n"
-            "Напишите, пожалуйста, название города чуть точнее (дату и время я уже запомнила)!"
+            f"✨ Солнце моё, не могу найти на карте место **«{place_query}»**.\n"
+            "Напиши, пожалуйста, название города чуть точнее (или ближайший крупный город — дату и время я уже бережно сохранила)!"
         )
         store.add_message(chat_id, user_id, "assistant", ask_city_again)
         await ack_msg.edit_text(markdown_to_telegram_html(ask_city_again), parse_mode=ParseMode.HTML)
@@ -436,7 +424,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             dt_local = datetime.datetime(d_parts[2], d_parts[1], d_parts[0], t_parts[0], t_parts[1])
     except Exception:
         ask_date_again = (
-            "⚠️ Пожалуйста, проверьте формат даты и времени (`ДД.ММ.ГГГГ ЧЧ:ММ`, например `15.05.1995 14:30`)."
+            "✨ Подскажи, пожалуйста, дату и время в привычном формате `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `15.05.1995 14:30`), чтобы эфемериды посчитали всё до секунды!"
         )
         store.add_message(chat_id, user_id, "assistant", ask_date_again)
         await ack_msg.edit_text(markdown_to_telegram_html(ask_date_again), parse_mode=ParseMode.HTML)
@@ -482,6 +470,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         user_question=user_q,
         rag_passages=rag_passages,
         history_messages=history,
+        is_followup=(not send_photo),
     )
     store.add_message(chat_id, user_id, "assistant", reading)
 

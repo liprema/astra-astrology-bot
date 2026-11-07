@@ -38,7 +38,11 @@ from bot.config import (
 )
 from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 from bot.knowledge_base import download_from_yandex_disk, extract_text_from_file, knowledge_base
-from bot.llm_tarot import analyze_tarot_dialog_completeness, generate_tarot_interpretation
+from bot.llm_tarot import (
+    analyze_tarot_dialog_completeness,
+    generate_arcana_chat_response,
+    generate_tarot_interpretation,
+)
 from bot.spread_renderer import render_spread_image
 from bot.tarot_engine import draw_tarot_spread
 
@@ -176,17 +180,13 @@ async def cmd_start(message: Message) -> None:
     store.mark_active(chat_id, user_id)
 
     welcome = (
-        "🃏 **Приветствую! Я — Аркана (Arcana), ваш автономный таролог-эксперт всех школ Таро.**\n\n"
-        "Я мгновенно откликаюсь на имя **«Аркана»** / **«Arcana»** и **помню весь наш диалог и сделанные расклады**, "
-        "поэтому вам никогда не придётся повторять одно и то же!\n\n"
-        "🔮 **В каких традициях и системах я работаю:**\n"
-        "• **Английская классическая школа (Уэйт RWS и Орден Золотой Зари)**.\n"
-        "• **Таро Тота Алистера Кроули** (каббалистические сефирот, астрологические деканы, телемитская система).\n"
-        "• **Марсельское и Французское Таро** (Папюс, Элифас Леви, Ходоровски).\n"
-        "• **Прямые и перевёрнутые карты**, расчёт **Дна колоды** (скрытого мотива), **Квинтэссенции** (итогового совета по сумме арканов) и **Элементальных достоинств** (баланса стихий).\n\n"
-        "📚 Команда `/books` — посмотреть загруженные книги по Таро.\n"
-        "🔄 Команда `/reset` — перетасовать колоду и начать совершенно новую тему с нуля.\n\n"
-        "*Напишите свой вопрос или просто позовите меня: «Аркана»!*"
+        "🃏 **Ну привет, дорогая! Я — Аркана.**\n\n"
+        "Розовые очки снимаю быстро, правду говорю прямо в лицо, но своих никогда в обиду не даю. "
+        "Со мной можно просто поболтать, обсудить чьи-то красные флаги и перемыть косточки бывшим, а можно разложить карты — я читаю расклады сразу через школы Уэйта, Таро Тота Алистера Кроули, Марсельский канон и Орден Золотой Зари.\n\n"
+        "Я мгновенно откликаюсь на имя **«Аркана»** и **помню весь наш разговор и выложенные карты**.\n\n"
+        "• Хочешь просто посекретничать или спросить совета? Зови меня!\n"
+        "• Хочешь расклад (на любовь, деньги, работу или выбор)? Просто расскажи своими словами, что происходит.\n"
+        "• `/reset` — перетасовать колоду и забыть старую тему."
     )
     await message.reply(markdown_to_telegram_html(welcome), parse_mode=ParseMode.HTML)
 
@@ -199,7 +199,7 @@ async def cmd_reset(message: Message) -> None:
     store.mark_active(chat_id, user_id)
     await message.reply(
         markdown_to_telegram_html(
-            "🔄 Колода перетасована, память предыдущего расклада очищена! Напишите, **о ком или о чём** ваш новый вопрос."
+            "🃏 Колода перетасована, прошлые грехи забыты! Ну давай, выкладывай — кого или что разбираем на этот раз?"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -326,25 +326,6 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     history = store.get_history(chat_id, user_id, limit=26)
 
-    stripped_without_wake = re.sub(
-        r"(?:привет|здравствуй(?:те)?|добрый\s+день|добрый\s+вечер|алло|эй|слушай|аркана|аркану|аркане|арканой|arcana|arkana|αρκάνα|ארקנה|أركانا|अर्काना|[!?,.\s])+",
-        "",
-        text,
-        flags=re.I,
-    )
-
-    if len(stripped_without_wake) < 3 and not saved_profile.get("last_spread") and len(history) <= 2:
-        instant_greeting = (
-            "🃏 **Привет! Я здесь — это Аркана.**\n\n"
-            "С удовольствием разложу для вас карты! Напишите мне своими словами:\n"
-            "• **О ком или о чём вы хотите спросить колоду?** (отношения, работа, финансы, выбор или перспектива).\n"
-            "• **Какой расклад сделаем?** (*Триплет 3 карты*, *На отношения 7 карт*, *Выбор 5 карт*, *Кельтский крест 10 карт*, *1 карта + Дно колоды* — или разберём ваши выпавшие карты).\n\n"
-            "*Я запомню весь наш разговор, пришлю иллюстрацию расклада и смогу отвечать на любые уточняющие вопросы!*"
-        )
-        store.add_message(chat_id, user_id, "assistant", instant_greeting)
-        await message.reply(markdown_to_telegram_html(instant_greeting), parse_mode=ParseMode.HTML)
-        return
-
     analysis = await analyze_tarot_dialog_completeness(history, saved_profile=saved_profile)
 
     store.update_profile(
@@ -356,15 +337,23 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         },
     )
 
-    if not analysis.get("has_all_required_data"):
-        clarification = analysis.get("missing_info_question_ru") or (
-            "🃏 Расскажите чуть подробнее, **о ком или о чём именно вопрос**, чтобы я настроилась на расклад!"
+    updated_profile = store.get_profile(chat_id, user_id)
+
+    if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
+        chat_reply = await generate_arcana_chat_response(
+            user_message=text,
+            history_messages=history,
+            saved_profile=updated_profile,
+            missing_info_hint=analysis.get("missing_info_question_ru") or "",
         )
-        store.add_message(chat_id, user_id, "assistant", clarification)
-        await message.reply(markdown_to_telegram_html(clarification), parse_mode=ParseMode.HTML)
+        store.add_message(chat_id, user_id, "assistant", chat_reply)
+        for part in split_html_telegram_message(chat_reply):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
         return
 
-    updated_profile = store.get_profile(chat_id, user_id)
     spread_type = analysis.get("spread_type") or updated_profile.get("spread_type") or "triplet"
     subject_name = analysis.get("subject_name") or updated_profile.get("subject_name") or "Запрос Кверента"
     user_q = analysis.get("user_question") or text
@@ -375,9 +364,9 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     draw_new = bool(analysis.get("draw_new_spread", True)) or not updated_profile.get("last_spread")
 
     ack_text = (
-        "🕯 *Тасую колоду, выкладываю арканы, смотрю Дно колоды и считаю Квинтэссенцию...*"
+        "🕯 *Тасую колоду, дорогая... Сейчас посмотрим, что там на самом деле на дне и в раскладе.*"
         if draw_new
-        else "🃏 *Обращаюсь к вашему раскладу и смотрю ответ на вопрос...*"
+        else "🃏 *Смотрю в твой расклад...*"
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
@@ -428,6 +417,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         user_question=user_q,
         rag_passages=rag_passages,
         history_messages=history,
+        is_followup=(not draw_new),
     )
     store.add_message(chat_id, user_id, "assistant", reading)
 

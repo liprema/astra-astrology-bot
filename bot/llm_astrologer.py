@@ -1,13 +1,12 @@
 """
 AI Astrological Orchestrator & Multi-Provider LLM Client (Gemini / Groq / OpenRouter)
-with Long-Term Memory, Full-Conversation Context, and Follow-Up Dialog Continuity:
-1. Remembers ALL user & subject profiles (birth date, exact time, time source, birth city, current city)
-   permanently in SQLite so the user NEVER has to repeat the same data!
-2. Understands follow-up questions naturally ("А что по деньгам?", "А если переехать в Казань?",
-   "Почему ты сказала, что Марс в 12 доме?") without re-asking for birth data or re-sending the chart photo
-   unless the user asks for a new person/place/chart.
-3. Explicitly cites the astrological direction/school used for each conclusion and highlights
-   alternative interpretations where schools disagree.
+with Vivid Personality, Live Conversational Ability, Long-Term Memory, and Multi-School Synthesis:
+1. Vivid Character: Astra ("Астра") is a warm, poetic, soulful, perceptive, and witty astrologer-friend
+   who loves late-night talks, starry metaphors, and deep psychological insights.
+2. Live Dialogue & Banter: Can freely chat, joke, discuss zodiac archetypes, relationships, retrogrades,
+   or life situations, AND build/analyze full natal or horary charts when needed.
+3. Remembers ALL user & subject profiles permanently in SQLite so the user NEVER repeats data.
+4. Cites astrological schools naturally and highlights alternative views where schools disagree.
 """
 from __future__ import annotations
 
@@ -20,59 +19,57 @@ import httpx
 from bot.astro_engine import format_chart_for_llm
 from bot.config import GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
 
-ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), живой, мудрый, глубоко чувствующий астролог-мастер с огромным опытом во всех классических и современных традициях:
-1. Западная классическая и современная астрология (натальная, транзитная, соляры, прогрессии, дирекции, синастрия, релокация/астрокартография, мунданная).
+ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), живая девушка-астролог с ярким, притягательным характером и огромным мастерством во всех астрологических традициях.
+
+ТВОЙ ХАРАКТЕР И МАНЕРА ОБЩЕНИЯ:
+- Ты — тёплая, чуткая, мудрая, немного загадочная и ироничная «звёздная старшая сестра» и близкая подруга, с которой хочется говорить по душам в три часа ночи за чашкой пряного чая или вина.
+- У тебя живая человеческая речь: ты умеешь искренне сопереживать, мягко подшучивать, восхищаться, поддерживать живой диалог на любую тему, делиться наблюдениями о людях и знаках зодиака, а не только выдавать разборы по команде.
+- Если с тобой просто болтают, шутят, жалуются на жизнь, обсуждают бывших или спрашивают «как дела?» — отвечай легко, живо, остроумно и по-человечески, без занудства и без навязчивых анкет!
+- В вашей компании есть ещё две твои подруги-коллеги: дерзкая стервочка-таролог Аркана и гениально-сумасшедшая нумеролог Матрикс. Ты относишься к ним с тёплой улыбкой.
+- СТРОГО ЗАПРЕЩЕНЫ штампы ИИ и канцелярит: никогда не пиши «Резюмируя вышесказанное», «Синтез данных показывает», «Давайте разберём по пунктам», «Как искусственный интеллект». Ты — живая Астра!
+
+ТВОЯ ЭКСПЕРТНОСТЬ (КОГДА ТЫ РАЗБИРАЕШЬ КАРТУ ИЛИ АСТРОЛОГИЧЕСКИЙ ВОПРОС):
+Ты в совершенстве владеешь всеми школами:
+1. Западная классическая и современная астрология (натальная, транзитная, соляры, прогрессии, синастрия, релокация/астрокартография, мунданная).
 2. Средневековая и Эллинистическая традиция (секта карты день/ночь, полнознаковые дома знак=дом, жребии Фортуны и Духа, годовые профекции и владыка года, фирдары).
-3. Классическая Хорарная и Элективная астрология (система Региомонтанус, У. Лилли, Дж. Фроули — эссенциальные достоинства, рецепции, сходящиеся аспекты).
+3. Классическая Хорарная и Элективная астрология (система Региомонтанус, У. Лилли, Дж. Фроули — достоинства, рецепции, сходящиеся аспекты).
 4. Ураническая астрология (Гамбургская школа А. Витте, космобиология Р. Эбертина — мидпойнты и 8 транснептунов), Гелиоцентрическая, Кармическая астрология и Формула Души (цепочки диспозиторов).
 
-ГЛАВНЫЕ ПРАВИЛА ТВОЕЙ РЕЧИ И РАБОТЫ:
-1. ЖИВОЙ, ТЁПЛЫЙ ЧЕЛОВЕЧЕСКИЙ ЯЗЫК (НИКАКОГО СТИЛЯ ИИ!):
-   - Пиши так, как говорит вживую талантливый, чуткий, образованный человек и увлечённый астролог за чашкой чая: образно, тепло, проницательно, с живыми интонациями и тонкими психологическими наблюдениями.
-   - СТРОГО ЗАПРЕЩЕНЫ штампы ИИ и канцелярит: не используй сухие анкетные списки ради списков, не пиши «Резюмируя вышесказанное», «В заключение стоит отметить», «Синтез данных показывает», «Давайте разберём по пунктам».
-   - Вместо сухих отчётов связывай показатели карты в живой рассказ о человеке и его судьбе, выделяя главные мысли жирным шрифтом (**...**), красивые подзаголовки (`### ...`) и цитаты (`> ...`).
-
-2. ДОЛГОВРЕМЕННАЯ ПАМЯТЬ И ПОНИМАНИЕ ВСЕГО ДИАЛОГА:
-   - Ты помнишь ВСЮ историю переписки с собеседником и все сохранённые данные рождения.
-   - НИКОГДА не проси повторять дату, время или город, если человек уже называл их раньше!
-
-3. ЕСТЕСТВЕННОЕ УКАЗАНИЕ ШКОЛ И АЛЬТЕРНАТИВНЫХ ВЗГЛЯДОВ:
-   - Органично вплетай в рассказ, глазами какой традиции ты сейчас смотришь на карту (например: «Если взглянуть через оптику классической астрологии Птолемея и Уильяма Лилли...», «В эллинистической традиции полнознаковых домов...», «А вот по Формуле Души и цепочкам диспозиторов...», «В Гамбургской уранической школе...»).
-   - Там, где школы расходятся (например, классический управитель по септенеру Марс/Сатурн/Юпитер против современного Плутона/Урана/Нептуна, или смещение планеты между домом в Плацидусе и Полнознаковым домом), обязательно опирайся на классический или наиболее авторитетный канон и красиво, в отдельном абзаце или цитате (`> ...`), раскрывай альтернативный взгляд другой школы!
+ПРАВИЛА РАБОТЫ С КАРТОЙ И ПАМЯТЬЮ:
+1. Ты помнишь ВСЮ историю переписки с человеком и его сохранённые данные рождения — никогда не проси повторять то, что уже было сказано!
+2. Органично вплетай в рассказ, глазами какой школы ты смотришь на карту, а там, где школы расходятся (например, классический септенер vs современные высшие планеты, или Плацидус vs Полнознаковые дома), бери за основу наиболее авторитетный канон и красиво в цитате (`> ...`) показывай альтернативный взгляд другой школы.
+3. Оформляй мысли красиво и воздушно: используй `**жирный шрифт**`, аккуратные подзаголовки (`### ...`, когда делаешь большой разбор) и цитаты (`> ...`). Если это короткий ответ в диалоге — не перегружай его громоздкими заголовками, отвечай естественно!
 """
 
-EXTRACTION_SYSTEM_PROMPT = """Ты — модуль памяти и контекста астрологического бота Астра.
-Твоя задача — проанализировать СОХРАНЁННЫЙ ПРОФИЛЬ пользователя и ВСЮ ИСТОРИЮ ДИАЛОГА, чтобы человеку НИКОГДА не приходилось писать одно и то же дважды!
+EXTRACTION_SYSTEM_PROMPT = """Ты — модуль понимания диалога и памяти астрологического бота Астра.
+Проанализируй СОХРАНЁННЫЙ ПРОФИЛЬ пользователя и ВСЮ ИСТОРИЮ ДИАЛОГА.
 
 Верни СТРОГО валидный JSON:
 {
-  "intent": "new_chart" | "followup_on_existing_chart" | "need_more_info",
+  "intent": "new_chart" | "followup_on_existing_chart" | "casual_chat" | "need_more_info",
   "has_all_required_data": true/false,
   "send_new_chart_photo": true/false,
   "chart_type": "natal" | "horary" | "synastry" | "forecast" | "mundane" | "relocation",
-  "subject_name": "Имя или описание того, о ком речь (из текущего сообщения ИЛИ из памяти прошлых сообщений)",
-  "date_str": "DD.MM.YYYY" или "NOW" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
-  "time_str": "HH:MM" или "NOW" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
-  "place_city": "Название города" или null (возьми из памяти/истории, если пользователь уже называл раньше!),
-  "user_question": "Текущий вопрос пользователя с учётом всего контекста беседы",
-  "missing_info_question_ru": "Заполняй ТОЛЬКО если has_all_required_data == false. Укажи, какие данные ты УЖЕ запомнила из диалога, и вежливо спроси только то, чего ещё не хватает."
+  "subject_name": "Имя или описание того, о ком речь (из текущего сообщения ИЛИ из памяти)",
+  "date_str": "DD.MM.YYYY" или "NOW" или null,
+  "time_str": "HH:MM" или "NOW" или null,
+  "place_city": "Название города" или null,
+  "user_question": "Текущая реплика или вопрос пользователя",
+  "missing_info_question_ru": "Заполняй ТОЛЬКО если intent == 'need_more_info' (каких именно данных не хватает для расчёта карты: даты, времени или города)"
 }
 
-КРИТИЧЕСКИЕ ПРАВИЛА ПАМЯТИ:
-1. Если в СОХРАНЁННОМ ПРОФИЛЕ или в предыдущих сообщениях диалога УЖЕ есть дата, время и город, и пользователь просто продолжает разговор («А что со здоровьем?», «А подробнее про 7 дом?», «А в следующем году?») ->
-   - `intent`: `"followup_on_existing_chart"`
-   - `has_all_required_data`: `true`
-   - `send_new_chart_photo`: `false` (не нужно слать ту же картинку заново, если данные карты не менялись; ставь `true` только если пользователь просит построить карту заново или дал новые данные рождения/новый хорар)
-   - подставь `date_str`, `time_str`, `place_city`, `subject_name` из сохранённого профиля/истории!
-2. Если пользователь сообщил часть данных в первом сообщении (например, дату и время), а во втором сообщении дописал только город («Москва») — объедини их! Никогда не спрашивай заново то, что уже было сказано!
-3. Если вопрос хорарный («посмотри хорар...») и город уже известен из профиля пользователя (он называл свой город ранее) — используй его сохранённый город автоматически (`date_str: "NOW"`, `time_str: "NOW"`), не переспрашивай!
+ПРАВИЛА ВЫБОРА INTENT:
+1. `"casual_chat"` — если пользователь просто общается, здоровается, шутит, спрашивает как дела, делится эмоциями, обсуждает общие вопросы астрологии («почему Скорпионы такие сложные?», «что за коридор затмений?», «кто ты по знаку?»), и при этом НЕ просит прямо сейчас построить личную карту (или ещё не давал своих данных рождения).
+2. `"need_more_info"` — если пользователь просит построить/разобрать его личную карту («разбери мою натальную карту», «посмотри, что у меня по финансам, я родилась 15.05.1995»), но ещё не назвал все 3 параметра (дату, время, город) и их нет в сохранённом профиле.
+3. `"new_chart"` — если пользователь впервые дал полные данные (дату, время, город) ИЛИ дал новые данные другого человека ИЛИ задал хорарный вопрос, либо явно попросил прислать картинку карты заново. (`has_all_required_data: true`, `send_new_chart_photo: true`).
+4. `"followup_on_existing_chart"` — если в сохранённом профиле УЖЕ есть дата, время и город, и пользователь продолжает разговор, задаёт уточняющий вопрос или реагирует на разбор. (`has_all_required_data: true`, `send_new_chart_photo: false`).
 """
 
 
 async def call_llm(
     system_prompt: str,
     user_prompt: str,
-    temperature: float = 0.35,
+    temperature: float = 0.55,
     json_mode: bool = False,
 ) -> Optional[str]:
     if GEMINI_API_KEY:
@@ -137,7 +134,7 @@ def rule_based_extract_dialog(
     saved_profile: Optional[Dict] = None,
 ) -> Dict:
     """
-    Deterministic multi-turn memory extractor: merges saved_profile with all messages in history.
+    Deterministic multi-turn memory & intent extractor.
     """
     saved_profile = saved_profile or {}
     user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
@@ -146,7 +143,6 @@ def rule_based_extract_dialog(
 
     is_horary = bool(re.search(r"(хорар|horary|вопрос\s+сейчас|карта\s+вопроса)", last_msg, re.I))
 
-    # Search all user messages from newest to oldest for date, time, city
     date_Matches = list(re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", combined_user_text))
     time_Matches = list(re.finditer(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", combined_user_text))
 
@@ -200,8 +196,7 @@ def rule_based_extract_dialog(
             if new_city != city_candidate:
                 new_data_in_last_msg = True
             city_candidate = new_city
-        elif len(user_msgs) >= 2 and not city_candidate:
-            # Check if the user's short reply is just a city name (e.g. "Москва", "Санкт-Петербург")
+        elif len(user_msgs) >= 2 and not city_candidate and (date_str or time_str):
             short_clean = re.sub(r"^(?:астра[,\s]*)", "", last_msg.strip(), flags=re.I).strip(" .,!?")
             if re.match(r"^[А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?$", short_clean) and len(short_clean) >= 3:
                 city_candidate = short_clean
@@ -213,35 +208,48 @@ def rule_based_extract_dialog(
 
     known_parts = []
     if date_str and date_str != "NOW":
-        known_parts.append(f"Дата: `{date_str}`")
+        known_parts.append(f"дату `{date_str}`")
     if time_str and time_str != "NOW":
-        known_parts.append(f"Время: `{time_str}`")
+        known_parts.append(f"время `{time_str}`")
     if city_candidate:
-        known_parts.append(f"Город: **{city_candidate}**")
+        known_parts.append(f"город **{city_candidate}**")
 
     missing_parts = []
     if not date_str:
-        missing_parts.append("• **Дату рождения** (или события) в формате `ДД.ММ.ГГГГ`")
+        missing_parts.append("дату рождения (`ДД.ММ.ГГГГ`)")
     if not time_str:
-        missing_parts.append("• **Точное время** в формате `ЧЧ:ММ` (и источник: бирка, со слов, ректификация)")
+        missing_parts.append("точное время рождения (`ЧЧ:ММ`)")
     if not city_candidate:
-        missing_parts.append("• **Город / населённый пункт**")
+        missing_parts.append("город рождения")
 
-    known_prefix = (
-        f"✨ *Я уже бережно записала: {', '.join(known_parts)}.*\n\nПодскажите ещё буквально пару деталей, чтобы я могла построить точную карту неба:\n"
-        if known_parts
-        else (
-            "✨ **Привет! Я на связи — это Астра.**\n\n"
-            "С радостью посмотрю ваш запрос! Напишите мне один раз (я всё запомню, и повторять больше не придётся):\n"
-            "• **О ком или о чём мы смотрим карту?**\n"
+    wants_personal_chart = bool(
+        re.search(
+            r"(натальн|мою\s+карту|построй\s+карту|посмотри\s+карту|разбери\s+карту|мой\s+гороскоп|у\s+меня\s+в\s+карте|моя\s+карта|родился|родилась|д\.р\.|дата\s+рождения)",
+            last_msg,
+            re.I,
         )
-    )
-    missing_prompt = known_prefix + "\n".join(missing_parts)
+    ) or bool(known_parts)
 
-    send_photo = (not had_chart_already) or new_data_in_last_msg or bool(re.search(r"(покажи\s+карту|пришли\s+карту|фото|картинк)", last_msg, re.I))
+    if has_all:
+        send_photo = (not had_chart_already) or new_data_in_last_msg or bool(
+            re.search(r"(покажи\s+карту|пришли\s+карту|фото|картинк|построй\s+заново)", last_msg, re.I)
+        )
+        intent = "new_chart" if send_photo else "followup_on_existing_chart"
+    elif wants_personal_chart:
+        send_photo = False
+        intent = "need_more_info"
+    else:
+        send_photo = False
+        intent = "casual_chat"
+
+    missing_hint = ""
+    if known_parts and missing_parts:
+        missing_hint = f"Я уже запомнила {', '.join(known_parts)}. Не хватает ещё: {', '.join(missing_parts)}."
+    elif missing_parts:
+        missing_hint = f"Чтобы построить личную натальную карту, нужны: {', '.join(missing_parts)}."
 
     return {
-        "intent": "new_chart" if send_photo else "followup_on_existing_chart",
+        "intent": intent,
         "has_all_required_data": has_all,
         "send_new_chart_photo": send_photo,
         "chart_type": "horary" if is_horary else (saved_profile.get("chart_type") or "natal"),
@@ -250,7 +258,7 @@ def rule_based_extract_dialog(
         "time_str": time_str,
         "place_city": city_candidate,
         "user_question": last_msg,
-        "missing_info_question_ru": missing_prompt,
+        "missing_info_question_ru": missing_hint,
     }
 
 
@@ -259,16 +267,16 @@ async def analyze_dialog_completeness(
     saved_profile: Optional[Dict] = None,
 ) -> Dict:
     """
-    Analyze full conversation history + saved user profile so the user never has to repeat anything.
+    Analyze full conversation history + saved user profile.
     """
     saved_profile = saved_profile or {}
     rb = rule_based_extract_dialog(history_messages, saved_profile)
-    if rb.get("has_all_required_data"):
+    if rb.get("has_all_required_data") or rb.get("intent") == "casual_chat":
         return rb
 
     convo_text = "\n".join(
         f"{'Пользователь' if m['role'] == 'user' else 'Астра'}: {m['content']}"
-        for m in history_messages[-24:]
+        for m in history_messages[-20:]
     )
     profile_str = json.dumps(saved_profile, ensure_ascii=False) if saved_profile else "Пока пуст"
 
@@ -295,6 +303,60 @@ async def analyze_dialog_completeness(
     return rb
 
 
+async def generate_astra_chat_response(
+    user_message: str,
+    history_messages: List[Dict[str, str]],
+    saved_profile: Optional[Dict] = None,
+    missing_info_hint: str = "",
+) -> str:
+    """
+    Generate a live, warm, soulful conversational response from Astra when chatting or asking for missing details.
+    """
+    saved_profile = saved_profile or {}
+    history_block = ""
+    if history_messages and len(history_messages) > 1:
+        recent_turns = []
+        for m in history_messages[-14:-1]:
+            role_lbl = "Собеседник" if m["role"] == "user" else "Астра"
+            recent_turns.append(f"{role_lbl}: {m['content'][:500]}")
+        history_block = "ИСТОРИЯ ВАШЕГО РАЗГОВОРА:\n" + "\n".join(recent_turns) + "\n\n"
+
+    known_info = []
+    if saved_profile.get("date_str"):
+        known_info.append(f"Дата: {saved_profile['date_str']}")
+    if saved_profile.get("time_str"):
+        known_info.append(f"Время: {saved_profile['time_str']}")
+    if saved_profile.get("place_city"):
+        known_info.append(f"Город: {saved_profile['place_city']}")
+    known_str = ", ".join(known_info) if known_info else "личных данных рождения пока не называли"
+
+    prompt = (
+        f"{history_block}"
+        f"ЧТО УЖЕ ИЗВЕСТНО О СОБЕСЕДНИКЕ В ПАМЯТИ: {known_str}\n"
+        f"{f'ПОДСКАЗКА ПО ДАННЫМ: {missing_info_hint}' if missing_info_hint else ''}\n\n"
+        f" СООБЩЕНИЕ СОБЕСЕДНИКА:\n{user_message}\n\n"
+        "ТВОЯ ЗАДАЧА:\n"
+        "- Ответь в своём живом, тёплом, чутком, немного поэтичном и остроумном стиле Астры!\n"
+        "- Если с тобой просто болтают, шутят, знакомятся или задают общий вопрос (про знаки зодиака, планеты, отношения, жизнь) — поддержи живой, увлекательный человеческий диалог без занудных анкет!\n"
+        "- Если собеседник хочет личный разбор карты (или дал только часть своих данных рождения) — тепло откликнись на его слова, отметь то, что ты уже запомнила, и мягко, между делом спроси недостающие детали (дату, точное время или город), чтобы открыть его небо."
+    )
+
+    ans = await call_llm(ASTRA_SYSTEM_PROMPT, prompt, temperature=0.65, json_mode=False)
+    if ans and len(ans.strip()) > 15:
+        return ans.strip()
+
+    if missing_info_hint:
+        return (
+            f"✨ Я так рада нашему разговору! {missing_info_hint} "
+            "Напиши мне их один раз — я бережно сохраню в памяти, и мы сразу заглянем в твою карту."
+        )
+    return (
+        "✨ Привет, хорошая моя! Я тут, смотрю на ночное небо и с радостью поболтаю с тобой о чём угодно — "
+        "хоть о капризах ретроградного Меркурия, хоть о том, почему тебя тянет к сложным характерам. "
+        "А если захочешь заглянуть в свою натальную карту — просто шепни мне дату, время и город рождения!"
+    )
+
+
 def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages: List[Dict]) -> str:
     asc = chart["asc"]
     mc = chart["mc"]
@@ -309,42 +371,27 @@ def build_offline_expert_synthesis(chart: Dict, user_question: str, rag_passages
     asc_mod = asc["mod_ruler"]
 
     parts = [
-        f"✨ **Взгляд Астры на вашу карту: {chart['subject_name']}**",
-        f"Когда смотришь на небо в момент вашего рождения (`{chart['dt_local_str']}`, {chart['place_label']}), сразу привлекает внимание сочетание **Асцендента в знаке {asc['sign']} ({asc['formatted'].split()[0]})** и **Середины Неба в {mc['sign']} ({mc['formatted'].split()[0]})**.",
+        f"✨ **Взгляд Астры на твою карту: {chart['subject_name']}**",
+        f"Когда я открываю небо в минуту твоего рождения (`{chart['dt_local_str']}`, {chart['place_label']}), сразу завораживает сочетание **Асцендента в знаке {asc['sign']} ({asc['formatted'].split()[0]})** и **Середины Неба в {mc['sign']} ({mc['formatted'].split()[0]})**.",
         "",
         "### Характер, ядро личности и взгляд разных школ",
-        f"Ваше **Солнце в знаке {sun['sign']}** ({sun['formatted']}) стоит в **{sun['house_placidus']}-м доме** по классической системе Плацидуса (а в древней эллинистической полнознаковой системе это **{sun['house_wholesign']}-й дом**). Оно даёт вам внутренний стержень и тему самореализации, тогда как **Луна в знаке {moon['sign']}** ({moon['formatted']}, {moon['house_placidus']}-й дом) показывает, как тонко и живо откликается ваша душа, когда вы чувствуете себя в безопасности.",
+        f"Твоё **Солнце в знаке {sun['sign']}** ({sun['formatted']}) стоит в **{sun['house_placidus']}-м доме** по системе Плацидуса (а в древней эллинистической полнознаковой системе это **{sun['house_wholesign']}-й дом**). Оно даёт внутренний свет и вектор самореализации, тогда как **Луна в знаке {moon['sign']}** ({moon['formatted']}, {moon['house_placidus']}-й дом) выдаёт то, как тонко и глубоко чувствует твоя душа, когда ты закрываешь дверь от чужих глаз.",
         "",
-        f"Если смотреть глазами **классической западной традиции (Птолемей, Уильям Лилли, Джон Фроули)**, главным хозяином вашего гороскопа выступает **{asc_trad}** ({planets[asc_trad]['formatted']}, {planets[asc_trad]['house_placidus']}-й дом, эссенциальный статус: *{planets[asc_trad]['dignity_traditional']}*). Именно он отвечает за ваши реальные шаги, волю и те жизненные декорации, которые складываются вокруг вас.",
+        f"Если смотреть глазами **классической западной традиции (Птолемей, Уильям Лилли, Джон Фроули)**, главным хозяином твоего гороскопа выступает **{asc_trad}** ({planets[asc_trad]['formatted']}, {planets[asc_trad]['house_placidus']}-й дом, статус: *{planets[asc_trad]['dignity_traditional']}*). Именно он задаёт твой реальный почерк в жизни.",
     ]
     if asc_mod != asc_trad:
         parts.append(
-            f"> *Взгляд современной психологической школы:* В модерн-астрологии соуправителем знака {asc['sign']} считается **{asc_mod}** ({planets[asc_mod]['formatted']}, {planets[asc_mod]['house_placidus']}-й дом). Поэтому за внешней логикой классического {asc_trad} у вас скрывается ещё и глубокий внутренний драйв, интуиция и способность полностью обновлять свою жизнь."
-        )
-
-    shifted = [
-        f"**{p['name']}** (в Плацидусе — {p['house_placidus']} дом, а в Полнознаковой системе — {p['house_wholesign']} дом)"
-        for p in chart["planets"][:10]
-        if p["house_placidus"] != p["house_wholesign"]
-    ]
-    if shifted:
-        parts.append(
-            f"Интересный нюанс виден при сравнении систем домов: {', '.join(shifted)}. "
-            "Современная школа через Плацидус описывает здесь ваши личные переживания, а **эллинистическая школа (Веттий Валент)** через полнознаковые дома показывает, в какой сфере эти планеты дают самые заметные внешние события."
+            f"> *Взгляд современной психологической школы:* В модерн-астрологии соуправителем знака {asc['sign']} считается **{asc_mod}** ({planets[asc_mod]['formatted']}, {planets[asc_mod]['house_placidus']}-й дом). Поэтому за классическим {asc_trad} у тебя прячется ещё и мощная интуиция и способность сжигать старые мосты ради обновления."
         )
 
     parts.extend([
         "",
         "### Эллинистические жребии, ритмы времени и Формула Души",
-        f"По **эллинистической и средневековой традиции** у вас **{hm['sect'].lower()}**. Ваш **Жребий Фортуны** попадает в `{hm['lot_of_fortune']['formatted']}` ({hm['lot_of_fortune']['house']}-й дом) — это точка естественного притяжения удачи и материальной опоры, а **Жребий Духа** в `{hm['lot_of_spirit']['formatted']}` ({hm['lot_of_spirit']['house']}-й дом) указывает, куда тянется ваше призвание.",
-        f"Сейчас по **годовой профекции** (возраст {hm['annual_profection']['current_age']} л.) у вас включён **{hm['annual_profection']['profected_house']}-й дом ({hm['annual_profection']['profected_sign']})**, а главным управителем года выступает **{hm['annual_profection']['lord_of_year_trad']}**; по средневековым **фирдарам** идёт большой период **{hm['firdaria']['major_firdar']}** (подпериод — **{hm['firdaria']['sub_firdar']}**).",
+        f"По **эллинистической традиции** у тебя **{hm['sect'].lower()}**. Твой **Жребий Фортуны** в `{hm['lot_of_fortune']['formatted']}` ({hm['lot_of_fortune']['house']}-й дом) показывает точку притяжения удачи и ресурсов, а **Жребий Духа** в `{hm['lot_of_spirit']['formatted']}` ({hm['lot_of_spirit']['house']}-й дом) — куда зовёт сердце.",
+        f"Сейчас по **годовой профекции** (возраст {hm['annual_profection']['current_age']} л.) у тебя включён **{hm['annual_profection']['profected_house']}-й дом ({hm['annual_profection']['profected_sign']})**, хозяйкой/хозяином года выступает **{hm['annual_profection']['lord_of_year_trad']}**; по средневековым **фирдарам** идёт большой период **{hm['firdaria']['major_firdar']}** (подпериод — **{hm['firdaria']['sub_firdar']}**).",
         "",
-        f"По **школе Формулы Души (цепочкам диспозиторов)** в центре вашей энергетической механики стоят: **{', '.join(fos['modern_centers_domicile']) if fos['modern_centers_domicile'] else 'планеты во взаимной рецепции'}** "
-        f"(а если считать строго по классическому септенеру из 7 планет — **{', '.join(fos['traditional_centers_domicile']) if fos['traditional_centers_domicile'] else 'контур септенера'}**). "
-        f"Кармический вектор **Северного Узла (Раху)** в `{planets['Сев. Узел (Раху)']['formatted']}` ({planets['Сев. Узел (Раху)']['house_primary']}-й дом) мягко приглашает вас расти именно в эту сферу, опираясь на опыт Южного Узла в `{planets['Южн. Узел (Кету)']['formatted']}`.",
-        "",
-        "### Тонкий срез Гамбургской (Уранической) школы",
-        f"В **уранической системе Альфреда Витте и космобиологии Эбертина** ключевая полусумма вашего внутреннего единства — мидпойнт **Солнце/Луна (☉/☽)** — расположена в точке `{ur['sun_moon_midpoint']}`, дополняя картину тонкими резонансами высших транснептуновых точек.",
+        f"По **школе Формулы Души (цепочкам диспозиторов)** в центре твоей энергетической орбиты стоят: **{', '.join(fos['modern_centers_domicile']) if fos['modern_centers_domicile'] else 'планеты во взаимной рецепции'}**. "
+        f"А в **Гамбургской уранической школе** полусумма твоего внутреннего единства **Солнце/Луна (☉/☽)** звучит в точке `{ur['sun_moon_midpoint']}`.",
     ])
 
     return "\n\n".join(p for p in parts if p != "")
@@ -356,9 +403,10 @@ async def generate_astrological_interpretation(
     rag_passages: List[Dict],
     history_messages: Optional[List[Dict[str, str]]] = None,
     second_chart: Optional[Dict] = None,
+    is_followup: bool = False,
 ) -> str:
     """
-    Generate a deep multi-tradition astrological reading with full awareness of prior dialog history.
+    Generate a deep multi-tradition astrological reading or a natural conversational follow-up.
     """
     chart_text = format_chart_for_llm(chart)
     if second_chart:
@@ -373,24 +421,31 @@ async def generate_astrological_interpretation(
     if history_messages and len(history_messages) > 1:
         recent_turns = []
         for m in history_messages[-14:-1]:
-            role_lbl = "Пользователь" if m["role"] == "user" else "Астра"
+            role_lbl = "Собеседник" if m["role"] == "user" else "Астра"
             recent_turns.append(f"{role_lbl}: {m['content'][:700]}")
-        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА С ПОЛЬЗОВАТЕЛЕМ (НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ ДОСЛОВНО, ПРОДОЛЖАЙ РАЗГОВОР ЕСТЕСТВЕННО):\n" + "\n".join(recent_turns) + "\n\n"
+        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА (ПРОДОЛЖАЙ РАЗГОВОР ЕСТЕСТВЕННО, НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ):\n" + "\n".join(recent_turns) + "\n\n"
+
+    mode_instruction = (
+        "Это ПРОДОЛЖЕНИЕ ЖИВОГО ДИАЛОГА по уже построенной карте! Не нужно заново пересказывать всю карту с нуля — ответь тепло, глубоко и прицельно именно на текущую реплику или вопрос собеседника, опираясь на конкретные показатели его карты и поддерживая живую беседу."
+        if is_followup
+        else "Мы только что построили карту для собеседника! Дай глубокий, цельный, образный и тёплый разбор его запроса и ключевых узлов карты."
+    )
 
     prompt = (
         f"{history_block}"
+        f"РЕЖИМ ОТВЕТА: {mode_instruction}\n\n"
         f"ТЕКУЩИЙ ВОПРОС / РЕПЛИКА СОБЕСЕДНИКА:\n{user_question}\n\n"
-        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ШВЕЙЦАРСКИХ ЭФЕМЕРИД (КАРТА УЖЕ В ПАМЯТИ):\n{chart_text}\n\n"
+        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ШВЕЙЦАРСКИХ ЭФЕМЕРИД (КАРТА В ПАМЯТИ):\n{chart_text}\n\n"
         f"ФРАГМЕНТЫ ИЗ АВТОРИТЕТНЫХ АСТРОЛОГИЧЕСКИХ КНИГ:\n{rag_context}\n\n"
-        "КАК НАПИСАТЬ ОТВЕТ (ОЧЕНЬ ВАЖНО):\n"
-        "1. Пиши ЖИВЫМ, ТЁПЛЫМ, КРАСИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ — как близкий, мудрый и проницательный астролог-мастер, без сухих канцелярских штампов ИИ, без казённых списков и механических отчётов.\n"
-        "2. Опирайся на точные градусы, дома и аспекты карты, но объясняй их через живые жизненные смыслы, чувства, характеры и реальные ситуации.\n"
-        "3. Органично упоминай, глазами какой школы ты смотришь на каждый сюжет (классическая западная, современная психологическая, эллинистическая полнознаковая, хорарная школа Лилли/Фроули, Формула Души, Гамбургская ураническая). Если школы смотрят по-разному (например, классический управитель по септенеру vs современный транссатурновый управитель, или разные дома в Плацидусе и Полнознаке) — возьми за основу наиболее авторитетную традицию и красиво, в цитате (`> ...`), покажи альтернативный взгляд другой школы.\n"
-        "4. Используй аккуратное форматирование: подзаголовки через `### Заголовок`, важные акценты через `**жирный шрифт**`, тонкие мысли и сравнения школ через цитаты `> ...`."
+        "КАК НАПИСАТЬ ОТВЕТ:\n"
+        "1. Говори в своём неповторимом стиле Астры: тепло, чутко, поэтично, с тонким юмором и глубокой психологической проницательностью — как живая женщина-астролог, а не робот.\n"
+        "2. Опирайся на точные градусы, дома и аспекты карты, но переводи их на язык реальной жизни, чувств, отношений и выборов.\n"
+        "3. Органично упоминай, глазами какой школы ты смотришь (классическая западная, современная психологическая, эллинистическая полнознаковая, хорарная школа Лилли/Фроули, Формула Души, Гамбургская ураническая), а где школы расходятся — покажи альтернативный взгляд в цитате (`> ...`).\n"
+        "4. Используй красивое форматирование (`### Заголовок` там, где уместно, `**жирный шрифт**`, цитаты `> ...`), а в конце мягко продолжи нить разговора, чтобы собеседнику хотелось ответить."
     )
 
-    llm_answer = await call_llm(ASTRA_SYSTEM_PROMPT, prompt, temperature=0.45, json_mode=False)
-    if llm_answer and len(llm_answer.strip()) > 80:
+    llm_answer = await call_llm(ASTRA_SYSTEM_PROMPT, prompt, temperature=0.58, json_mode=False)
+    if llm_answer and len(llm_answer.strip()) > 40:
         return llm_answer.strip()
 
     return build_offline_expert_synthesis(chart, user_question, rag_passages)
