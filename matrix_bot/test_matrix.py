@@ -20,12 +20,15 @@ from bot.numerology_engine import calculate_full_numerology
 
 def run_tests() -> None:
     should_match = [
+        "Матрикс, привет!",
+        "матрикс посчитай мне дату",
         "Матрица, привет!",
         "матрица посчитай мне дату",
-        "Привет, МАТРИЦА!",
+        "Привет, МАТРИКС!",
         "Matrix, calculate my life path",
         "Hey matrix!",
-        "Позовите Матрицу",
+        "Позовите Матрикса",
+        "Спрошу у Матрикса про финансовый код",
         "Спрошу у Матрицы про финансовый код",
         "Μάτριξ",
         "מטריקס",
@@ -40,7 +43,7 @@ def run_tests() -> None:
     ]
     for s in should_not_match:
         assert not contains_matrix_wake_word(s), f"False positive wake word in: {s}"
-    print("[OK] Multilingual & case-insensitive wake-word detector ('Матрица' / 'Matrix') verified.")
+    print("[OK] Multilingual & case-insensitive wake-word detector ('Матрикс' / 'Матрица' / 'Matrix') verified.")
 
     incomplete = rule_based_extract_matrix_dialog([{"role": "user", "content": "Матрица, расскажи про мои деньги"}])
     assert not incomplete["has_all_required_data"], "Should require birth date before calculating!"
