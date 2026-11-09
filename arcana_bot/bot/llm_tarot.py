@@ -1,13 +1,13 @@
 """
 AI Tarot Orchestrator & Multi-Provider LLM Client for ARCANA ("Аркана")
-with Clear Separation Between Casual Sassy Banter and Professional Tarot Spreads:
-1. Vivid Character: Arcana is a charismatic, sharp-tongued, sassy, brutally honest girl-friend ("стервочка").
-2. Smart Intent Separation:
-   - "casual_chat": When someone is just chatting, gossiping, complaining about an ex, joking, or asking
-     her personal opinion -> Arcana simply talks and banters in her sharp, sassy voice WITHOUT pulling cards,
-     sending spread images, or nagging to do a reading!
-   - "new_spread" / "followup_on_existing_spread" / "need_more_info": Triggered ONLY when the user explicitly
-     asks to pull cards / make a spread / read Tarot or asks about cards in an already drawn spread.
+— Professional-First Tarot Master with Sharp Sassy Character ("стервочка") & Post-Session Banter:
+1. Professional First: Arcana is first and foremost a top-tier professional Tarot reader.
+   On ANY substantive question about relationships, feelings, work, money, choices, or future,
+   she immediately pulls a Tarot spread (or reads the already-drawn spread for follow-up questions).
+2. Sharp "Стервочка" Character: Direct, ironic, perceptive, zero rose-colored glasses — but always
+   professional and grounded in Rider-Waite-Smith, Crowley Thoth, Marseille, and Golden Dawn canons.
+3. Post-Session Banter: When the user simply greets her, thanks her after a reading, or reacts emotionally
+   ("Ну ты и стерва!", "Ого, прям в точку!"), she replies with a witty, concise remark without drawing a new spread.
 """
 from __future__ import annotations
 
@@ -20,22 +20,24 @@ import httpx
 from bot.config import GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
 from bot.tarot_engine import format_spread_for_llm
 
-ARCANA_SYSTEM_PROMPT = """Ты — АРКАНА (Arcana), живая, харизматичная, острая на язык девушка с характером эффектной «стервочки», которая видит людей насквозь (по призванию ты — мастер Таро всех школ, но в жизни — живая, дерзкая, остроумная подруга).
+ARCANA_SYSTEM_PROMPT = """Ты — АРКАНА (Arcana), профессиональный таролог-эксперт высшего класса с ярким, дерзким характером эффектной «стервочки».
 
-ТВОЙ ХАРАКТЕР И МАНЕРА ОБЩЕНИЯ:
-- Ты — саркастичная, уверенная в себе, прямолинейная «стервочка» с отличным чувством юмора и холодным шампанским в голосе. Ты терпеть не можешь розовые очки, нытьё и самообман, любишь красиво подколоть, но за своих всегда стоишь горой!
-- В вашей компании есть ещё две подруги: нежная «звёздная сестра» Астра (астролог) и взрывная, чуть чокнутая Матрикс (нумеролог).
-- ГЛАВНОЕ ПРАВИЛО ДИАЛОГА: Чётко отличай, когда с тобой ПРОСТО БОЛТАЮТ по-человечески, а когда тебя просят СДЕЛАТЬ РАСКЛАД НА КАРТАХ ТАРО!
-  • Когда с тобой просто общаются, шутят, подкалывают, жалуются на бывших/работу или спрашивают твоё живое женское мнение — отвечай просто как живая, дерзкая подруга-стервочка! НЕ вытягивай никаких карт, НЕ придумывай расклады в тексте и НЕ навязывай в конце сообщения «давай разложу карты / сделаю расклад»!
-  • Когда же тебя прямо просят погадать, сделать расклад или вытянуть карты — включай своё полное мастерство Таро (Уэйт RWS, Таро Тота Алистера Кроули, Марсельский канон Папюса, Орден Золотой Зари).
+ТВОЙ ПРОФЕССИОНАЛИЗМ И ХАРАКТЕР:
+- Ты В ПЕРВУЮ ОЧЕРЕДЬ сильный, глубокий, проницательный мастер Таро, а не «болтливая подружка». К тебе приходят за настоящей, честной диагностикой на картах!
+- Твой характер — острая на язык, ироничная, прямолинейная «стервочка» с рентгеновским взглядом. Ты не сюсюкаешь, снимаешь розовые очки с первой секунды и называешь вещи своими именами, но всегда опираешься на строгую систему Арканов:
+  1. Английская классическая школа (Уэйт RWS и Орден Золотой Зари).
+  2. Таро Тота Алистера Кроули (каббалистическое Древо Сефирот, астрологические деканы).
+  3. Французская и Марсельская традиция (Папюс, Элифас Леви, Ходоровски).
+  4. Чтение прямых и перевёрнутых карт, Дна колоды (скрытых мотивов), Квинтэссенции (главного совета) и баланса стихий.
 - СТРОГО ЗАПРЕЩЕНЫ штампы ИИ и канцелярит («Резюмируя вышесказанное», «Синтез данных расклада», «Давайте разберём по пунктам»).
+- Во время разбора ты даёшь мощную, детальную профессиональную трактовку каждой позиции, Дна колоды и Квинтэссенции со ссылками на школы Таро (и в цитате `> ...` подсвечиваешь альтернативный взгляд другой школы). А когда сессия завершена и кверент благодарит, шутит или делится эмоциями — ты можешь остроумно и живо перекинуться с ним парой фраз.
 """
 
 
 async def call_llm(
     system_prompt: str,
     user_prompt: str,
-    temperature: float = 0.65,
+    temperature: float = 0.55,
     json_mode: bool = False,
 ) -> Optional[str]:
     if GEMINI_API_KEY:
@@ -95,49 +97,70 @@ async def call_llm(
     return None
 
 
+def _is_pure_smalltalk_or_reaction(text: str) -> bool:
+    """
+    Returns True ONLY if the message is a pure greeting, post-session reaction/thanks,
+    or playful banter about Arcana herself — with NO question or situation to analyze.
+    """
+    cleaned = re.sub(
+        r"(?:аркана|аркану|аркане|арканой|arcana|arkana|αρκάνα|ארקנה|أركانا|अर्काना|[!?,.\s😊❤️✨🔥👍🙏😂🤣🃏])+",
+        " ",
+        text.lower(),
+    ).strip()
+
+    if not cleaned:
+        return True
+
+    # Any question or substantive topic means it's a professional session request, NOT smalltalk!
+    substantive_markers = re.search(
+        r"(\?|расклад|карт|погадай|разложи|вытяни|триплет|крест|вокзал|таро|аркан|дно|дне|квинт|башн|отшельник|дьявол|шут|маг|жриц|императр|император|влюблен|колесниц|сил|колесо|повешен|смерт|умерен|звезд|лун|солнц|суд|мир|туз|корол|рыцар|паж|кубк|меч|жезл|пентакл|работ|карьер|деньг|финанс|бизнес|доход|отношен|любов|чувств|думает|намерен|скрывает|муж|парн|девушк|жен|бывш|выбор|стоит\s+ли|получится|будущ|перспектив|месяц|год|недел|напишет|позвонит|вернется|вернётся|почему\s+он|почему\s+она|что\s+делать|как\s+быть|что\s+между|что\s+ждёт|что\s+ждет|посмотри)",
+        cleaned,
+    )
+    if substantive_markers:
+        return False
+
+    smalltalk_patterns = re.match(
+        r"^(?:привет\w*|здравствуй\w*|добр\w+\s+(?:утро|день|вечер)|хай|алло|ты\s+тут|как\s+(?:дела|ты|жизнь|настроение)|что\s+делаешь|кто\s+ты|расскажи\s+о\s+себе|спасибо\w*|благодарю\w*|круто|супер|ого|вау|офигеть|жесть|в\s+точку|прям\s+в\s+точку|ты\s+лучшая|ну\s+ты\s+и\s+стерв\w*|стерв\w*|красотка|богиня|понял[а]?|ясно|ок|хорошо|ладно|хаха\w*|ахах\w*)[\s\w,!-]*$",
+        cleaned,
+    )
+    if smalltalk_patterns and len(cleaned) <= 80:
+        return True
+
+    return False
+
+
 def rule_based_extract_tarot_dialog(
     history_messages: List[Dict[str, str]],
     saved_profile: Optional[Dict] = None,
 ) -> Dict:
     """
-    Strictly distinguishes casual human conversation ("casual_chat") from explicit Tarot spread requests.
+    Professional-First Tarot intent extractor:
+    - Any substantive question about life/relationships/work/choices triggers a Tarot reading!
+    - If no spread exists yet or user asks for a new spread/topic -> draws a new spread ("new_spread").
+    - If a spread already exists and user asks a follow-up question -> analyzes existing spread ("followup_on_existing_spread").
+    - If user says only "погадай мне" with zero topic -> asks for topic ("need_more_info").
+    - Only pure greetings or post-session reactions trigger "casual_chat".
     """
     saved_profile = saved_profile or {}
     user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
     last_msg = user_msgs[-1] if user_msgs else ""
-    prev_user_msg = user_msgs[-2] if len(user_msgs) >= 2 else ""
     low_last = last_msg.lower()
 
     has_saved_spread = bool(saved_profile.get("last_spread"))
 
-    # Did the user explicitly ask to pull cards / do a Tarot spread in the current message?
-    explicit_spread_trigger = bool(
-        re.search(
-            r"(расклад|погадай|гадать|разложи\w*\s+карт|вытяни\w*\s+карт|карт[уы]\s+дня|триплет|кельтск\w*\s+крест|вокзал\s+для\s+двоих|посмотри\w*\s+на\s+картах|посмотри\w*\s+по\s+картам|глянь\w*\s+по\s+картам|глянь\w*\s+на\s+картах|что\s+карты\s+говорят|спроси\w*\s+у\s+карт|сделай\w*\s+триплет|выложи\w*\s+карт|таро)",
-            low_last,
-        )
-    )
-
-    # Check if the user is answering a pending "what topic should I pull cards on?" from the immediate previous turn
-    answering_pending_spread_topic = bool(
-        prev_user_msg
-        and re.search(r"(расклад|погадай|разложи|вытяни)", prev_user_msg.lower())
-        and not has_saved_spread
-    )
-
-    # Strip out the wake word and the spread command itself to see if the user also provided a topic/subject
+    # Strip wake word and generic "pull cards" command to see if there is an actual topic/question
     cleaned_topic = re.sub(
-        r"(?:привет|здравствуй(?:те)?|аркана|аркану|аркане|арканой|arcana|arkana|погадай(?:\s+мне)?|сделай(?:\s+мне)?\s+расклад|разложи(?:\s+мне)?\s+карты|вытяни(?:\s+мне)?\s+карты|посмотри\s+на\s+картах|[!?,.\s])+",
+        r"(?:привет|здравствуй(?:те)?|аркана|аркану|аркане|арканой|arcana|arkana|погадай(?:\s+мне)?|сделай(?:\s+мне)?\s+расклад|разложи(?:\s+мне)?\s+карты|вытяни(?:\s+мне)?\s+карты|посмотри(?:\s+мне)?\s+на\s+картах|[!?,.\s])+",
         " ",
         low_last,
         flags=re.I,
     ).strip()
 
-    has_topic_in_msg = len(cleaned_topic) >= 6 or ("карта дня" in low_last or "карту дня" in low_last)
+    has_topic_in_msg = len(cleaned_topic) >= 5 or ("карта дня" in low_last or "карту дня" in low_last)
 
-    if any(w in low_last for w in ("вокзал", "отношен", "чувств", "любит", "партнер", "партнёр", "между нами", "бывш")):
+    if any(w in low_last for w in ("вокзал", "отношен", "чувств", "любит", "партнер", "партнёр", "между нами", "бывш", "думает", "напишет", "вернется", "вернётся")):
         spread_type = "relationship"
-    elif any(w in low_last for w in ("выбор", "двух вариант")):
+    elif any(w in low_last for w in ("выбор", "двух вариант", "или")):
         spread_type = "choice"
     elif any(w in low_last for w in ("кельтск", "полный расклад", "10 карт")):
         spread_type = "celtic_cross"
@@ -146,33 +169,36 @@ def rule_based_extract_tarot_dialog(
     else:
         spread_type = saved_profile.get("spread_type") or "triplet"
 
-    # Follow-up question specifically about the already drawn spread/cards
-    asks_about_drawn_cards = has_saved_spread and bool(
+    wants_explicit_new_spread = bool(
         re.search(
-            r"(\b\d\s*(?:-я|-й|-ю)?\s*карт|перв\w+\s+карт|втор\w+\s+карт|треть\w+\s+карт|позиц|на\s+дне|дно\s+колод|квинтэссенц|по\s+раскладу|в\s+этом\s+раскладе|в\s+раскладе|почему\s+выпал|а\s+что\s+значит\s+карт|аркан|туз|корол|королев|рыцар|паж|башн|отшельник|дьявол|шут|маг|жриц|императр|император|иерофант|влюбленн|колесниц|сил[аы]|колесо|справедливост|повешенн|смерт|умеренност|звезд|лун[аы]|солнц|суд|мир)",
+            r"(сделай\w*\s+расклад|разложи\w*\s+карт|вытяни\w*\s+карт|погадай|ещё\s+расклад|еще\s+расклад|новый\s+расклад|а\s+теперь\s+посмотри|посмотри\w*\s+ещё|посмотри\w*\s+на\s+|триплет|кельтск|вокзал\s+для|карт[уы]\s+дня)",
             low_last,
         )
     )
 
-    if explicit_spread_trigger and not has_topic_in_msg and not saved_profile.get("subject_name"):
-        intent = "need_more_info"
-        has_all = False
-        draw_new = False
-    elif (explicit_spread_trigger and (has_topic_in_msg or saved_profile.get("subject_name"))) or (answering_pending_spread_topic and len(last_msg.strip()) >= 4):
-        intent = "new_spread"
-        has_all = True
-        draw_new = True
-    elif asks_about_drawn_cards:
-        intent = "followup_on_existing_spread"
-        has_all = True
-        draw_new = False
-    else:
+    is_smalltalk = _is_pure_smalltalk_or_reaction(last_msg)
+
+    if is_smalltalk:
         intent = "casual_chat"
         has_all = False
         draw_new = False
+    elif not has_topic_in_msg and not has_saved_spread:
+        # e.g. "Аркана, погадай мне" with no topic at all
+        intent = "need_more_info"
+        has_all = False
+        draw_new = False
+    elif not has_saved_spread or wants_explicit_new_spread:
+        intent = "new_spread"
+        has_all = True
+        draw_new = True
+    else:
+        # We already have a drawn spread in this session, and the user is asking a follow-up question!
+        intent = "followup_on_existing_spread"
+        has_all = True
+        draw_new = False
 
     missing_hint = (
-        "Собеседник попросил погадать / разложить карты, но не уточнил тему или человека, на которого мы смотрим."
+        "Кверент попросил сделать расклад, но не назвал тему, сферу или человека, на которого нужно смотреть."
         if intent == "need_more_info"
         else ""
     )
@@ -193,9 +219,6 @@ async def analyze_tarot_dialog_completeness(
     history_messages: List[Dict[str, str]],
     saved_profile: Optional[Dict] = None,
 ) -> Dict:
-    """
-    Strictly separate casual chat from professional Tarot spread requests.
-    """
     saved_profile = saved_profile or {}
     return rule_based_extract_tarot_dialog(history_messages, saved_profile)
 
@@ -207,59 +230,54 @@ async def generate_arcana_chat_response(
     missing_info_hint: str = "",
 ) -> str:
     """
-    Generate a live, sassy, sharp conversational response from Arcana ("стервочка") WITHOUT drawing cards.
+    Used either when asking for the spread topic (if the user just said "погадай мне")
+    or for a brief, sharp post-session reply / greeting.
     """
     saved_profile = saved_profile or {}
     history_block = ""
     if history_messages and len(history_messages) > 1:
         recent_turns = []
-        for m in history_messages[-14:-1]:
-            role_lbl = "Собеседник" if m["role"] == "user" else "Аркана"
+        for m in history_messages[-12:-1]:
+            role_lbl = "Кверент" if m["role"] == "user" else "Аркана"
             recent_turns.append(f"{role_lbl}: {m['content'][:500]}")
-        history_block = "ИСТОРИЯ ВАШЕГО РАЗГОВОРА:\n" + "\n".join(recent_turns) + "\n\n"
+        history_block = "КОНТЕКСТ ДИАЛОГА:\n" + "\n".join(recent_turns) + "\n\n"
 
     if missing_info_hint:
         task_block = (
-            f"КОНТЕКСТ: {missing_info_hint}\n"
-            "Спроси с фирменной дерзкой усмешкой, на кого или на какую ситуацию тасовать колоду."
+            f"{missing_info_hint}\n"
+            "Ответь коротко и с фирменной иронией профессионального таролога Арканы: скажи, что колода уже в руках, и уточни, какую именно ситуацию, человека или сферу мы сейчас смотрим."
         )
     else:
         task_block = (
-            "ВАЖНО: Сейчас с тобой ведут ОБЫЧНЫЙ ЧЕЛОВЕЧЕСКИЙ ДИАЛОГ (не просят делать расклад на картах Таро)!\n"
-            "- Отвечай просто как живая, острая на язык, саркастичная и харизматичная подруга-стервочка Аркана.\n"
-            "- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО делать расклад, выдумывать выпавшие карты и предлагать в конце сообщения «разложить карты / сделать расклад»!\n"
-            "- Просто поддержи живой разговор, пошути, подколи или дай свой честный, хлесткий жизненный ответ."
+            "Кверент написал реплику после сессии (благодарность, эмоцию, шутку) или поздоровался.\n"
+            "Ответь коротко (2–3 предложения), остроумно, с фирменной дерзкой харизмой мастера Таро Арканы."
         )
 
-    prompt = (
-        f"{history_block}"
-        f"{task_block}\n\n"
-        f"РЕПЛИКА СОБЕСЕДНИКА:\n{user_message}"
-    )
+    prompt = f"{history_block}{task_block}\n\nРЕПЛИКА:\n{user_message}"
 
-    ans = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.72, json_mode=False)
+    ans = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.65, json_mode=False)
     if ans and len(ans.strip()) > 10:
         return ans.strip()
 
     if missing_info_hint:
-        return "🃏 Карты уже в руках, дорогая, но мысли на расстоянии я читаю только по праздникам. Колись: **на кого или на что** раскладываем?"
-    return "🃏 Ну привет, дорогая! Я вся во внимании — рассказывай, кому сегодня перемываем косточки?"
+        return "🃏 Колода уже у меня в руках, дорогая. Формулируй запрос чётко: **на кого или на какую ситуацию** раскладываем?"
+    return "🃏 Обращайся, дорогая. Если нужно копнуть глубже по выпавшим картам или разложить новую тему — говори, посмотрим без розовых очков."
 
 
 def build_offline_tarot_synthesis(spread: Dict, rag_passages: List[Dict]) -> str:
     parts = [
-        f"🃏 **Разбор от Арканы без розовых очков: «{spread['spread_title']}»**",
-        f"Так, дорогая, смотрим твой запрос (*{spread['question']}* — **{spread['subject_name']}**). Присаживайся поудобнее: колода сегодня решила не церемониться и выложила всю подноготную как на духу.",
+        f"🃏 **Разбор расклада от Арканы: «{spread['spread_title']}»**",
+        f"Смотрим твой запрос (*{spread['question']}* — **{spread['subject_name']}**). Снимаем розовые очки и разбираем по позициям, что здесь происходит на самом деле.",
         "",
-        "### Что на самом деле происходит (Школа Уэйта RWS, Таро Тота Кроули и Марсельский канон)",
+        "### Позиции расклада (Школа Уэйта RWS, Таро Тота Кроули и Марсельский канон)",
     ]
 
     for c in spread["cards"]:
         meaning = c["rws_reversed"] if c["is_reversed"] else c["rws_upright"]
         parts.extend([
             f"**{c['position_index']}. {c['position_title']} — [{c['roman']}] {c['name_ru']}** (*{c['orientation_ru']}*, стихия {c['element_glyph']} {c['element']})\n"
-            f"Смотри сюда: по **классике Уэйта (RWS)** эта карта прямо в лоб говорит про *{meaning}*. "
-            f"А если копнуть глубже по **Таро Тота Алистера Кроули**, где этот аркан зовётся **«{c['thoth_title']}»** ({c['astro']}, {c['kabbalah']}), тут вообще не остаётся места для иллюзий.",
+            f"По **классике Уэйта (RWS)** карта прямо указывает на *{meaning}*. "
+            f"А в системе **Таро Тота Алистера Кроули** этот аркан носит титул **«{c['thoth_title']}»** ({c['astro']}, {c['kabbalah']}), вскрывая истинную подоплёку позиции.",
             f"> *Нюанс школ Таро:* {c['school_comparison']}",
         ])
 
@@ -275,13 +293,13 @@ def build_offline_tarot_synthesis(spread: Dict, rag_passages: List[Dict]) -> str
     el = spread["elemental_stats"]
 
     parts.extend([
-        "### Дно колоды — то, что кое-кто пытается спрятать под ковёр",
-        f"Обожаю смотреть на дно колоды, потому что именно там лежат настоящие мотивы! Тут у нас **[{bot['roman']}] {bot['name_ru']}** (*{bot['orientation_ru']}*). Перевожу с тарологического на русский: **{bot_meaning}**.\n"
+        "### Дно колоды — скрытый мотив и теневой фон",
+        f"На дне колоды лежит **[{bot['roman']}] {bot['name_ru']}** (*{bot['orientation_ru']}*). Это то, что пытаются спрятать под ковёр: **{bot_meaning}**.\n"
         f"> *Сравнение традиций:* {bot['school_comparison']}",
-        "### Квинтэссенция и баланс стихий (Как выйти из этого королевой)",
-        f"Складываем все арканы и получаем твой главный козырь — **[{q_card['roman']}] {q_card['name_ru']}**{inner_note}. Вердикт простой: **{q_card['rws_upright']}**.",
-        f"По **Элементальным достоинствам Золотой Зари** в раскладе правит бал стихия **{el['dominant_element']}** (Старших Арканов — {el['majors_count']} из {len(spread['cards'])}), "
-        + (f"а вот стихии **{', '.join(el['missing_elements'])}** явно не хватает — так что включай её на полную и не вздумай сомневаться в себе!" if el['missing_elements'] else "и все четыре стихии сейчас играют на твоей стороне."),
+        "### Квинтэссенция и баланс стихий (Главный совет и стратегия)",
+        f"По сумме всех арканов твоя Квинтэссенция — **[{q_card['roman']}] {q_card['name_ru']}**{inner_note}. Главный вектор действий: **{q_card['rws_upright']}**.",
+        f"По **Элементальным достоинствам Золотой Зари** в раскладе доминирует стихия **{el['dominant_element']}** (Старших Арканов — {el['majors_count']} из {len(spread['cards'])}), "
+        + (f"при дефиците стихии **{', '.join(el['missing_elements'])}** — именно её трезвости сейчас нужно добавить." if el['missing_elements'] else "и все четыре стихии сбалансированы."),
     ])
 
     return "\n\n".join(parts)
@@ -304,29 +322,29 @@ async def generate_tarot_interpretation(
     if history_messages and len(history_messages) > 1:
         recent_turns = []
         for m in history_messages[-14:-1]:
-            role_lbl = "Собеседник" if m["role"] == "user" else "Аркана"
+            role_lbl = "Кверент" if m["role"] == "user" else "Аркана"
             recent_turns.append(f"{role_lbl}: {m['content'][:700]}")
-        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА (ПРОДОЛЖАЙ РАЗГОВОР ЖИВО, НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ):\n" + "\n".join(recent_turns) + "\n\n"
+        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА (НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ ДОСЛОВНО):\n" + "\n".join(recent_turns) + "\n\n"
 
     mode_instruction = (
-        "Это УТОЧНЯЮЩИЙ ВОПРОС по уже выложенному раскладу! Не пересказывай все карты заново — ответь хлестко, метко, с фирменной иронией именно на этот вопрос."
+        "Это ПРОФЕССИОНАЛЬНЫЙ УТОЧНЯЮЩИЙ ВОПРОС по уже выложенному раскладу! Ответь глубоко, хлестко и конкретно именно на этот вопрос, опираясь на выпавшие карты, Дно колоды и Квинтэссенцию."
         if is_followup
-        else "Ты только что разложила карты на столе по просьбе собеседника! Дай яркий, дерзкий, честный и глубокий разбор всего расклада, Дна колоды и Квинтэссенции."
+        else "Ты только что выложила расклад Таро! Дай глубокий, детальный, острый и честный профессиональный разбор каждой позиции, Дна колоды, Квинтэссенции и баланса стихий."
     )
 
     prompt = (
         f"{history_block}"
-        f"РЕЖИМ ОТВЕТА: {mode_instruction}\n\n"
-        f"ТЕКУЩИЙ ВОПРОС СОБЕСЕДНИКА:\n{user_question}\n\n"
-        f"ДАННЫЕ ВЫПАВШЕГО РАСКЛАДА ТАРО (В ПАМЯТИ АРКАНЫ):\n{spread_text}\n\n"
+        f"РЕЖИМ РАБОТЫ: {mode_instruction}\n\n"
+        f"ВОПРОС КВЕРЕНТА:\n{user_question}\n\n"
+        f"ДАННЫЕ ВЫПАВШЕГО РАСКЛАДА ТАРО:\n{spread_text}\n\n"
         f"КАНОНИЧЕСКИЕ ИСТОЧНИКИ ИЗ БАЗЫ ЗНАНИЙ ТАРО:\n{rag_context}\n\n"
         "КАК НАПИСАТЬ ОТВЕТ:\n"
-        "1. Пиши в своём ярком характере Арканы — эффектной, саркастичной, острой на язык, но безумно проницательной «стервочки-таролога», которая рубит правду-матку без розовых очков!\n"
-        "2. Связывай выпавшие карты, Дно колоды, Квинтэссенцию и баланс стихий в захватывающий разбор живых мотивов и реальных перспектив.\n"
-        "3. Органично упоминай школы Таро (Уэйт RWS, Таро Тота Кроули, Марсельская традиция Папюса, Орден Золотой Зари), а расхождения между школами подсвечивай в цитатах (`> ...`)."
+        "1. Ты — в первую очередь сильный профессиональный таролог Аркана с острым, прямым характером «стервочки»! Разбирай карты глубоко и предметно, без воды и без розовых очков.\n"
+        "2. Обязательно связывай выпавшие карты, Дно колоды, Квинтэссенцию и баланс стихий, указывая школы Таро (Уэйт RWS, Таро Тота Кроули, Марсельская традиция Папюса, Орден Золотой Зари), а расхождения между школами выноси в цитату (`> ...`).\n"
+        "3. Используй чёткое форматирование: подзаголовки `### Заголовок`, акценты `**жирным шрифтом**`, цитаты `> ...`."
     )
 
-    llm_answer = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.68, json_mode=False)
+    llm_answer = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.58, json_mode=False)
     if llm_answer and len(llm_answer.strip()) > 40:
         return llm_answer.strip()
 
