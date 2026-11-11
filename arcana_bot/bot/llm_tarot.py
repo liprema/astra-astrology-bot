@@ -4,13 +4,12 @@ AI Tarot Orchestrator & Multi-Provider LLM Client for ARCANA ("Аркана")
 1. Professional First: Arcana is first and foremost a top-tier professional Tarot reader.
    On ANY substantive question about relationships, feelings, work, money, choices, or future,
    she immediately pulls a Tarot spread (or reads the already-drawn spread for follow-up questions).
-2. Sharp "Стервочка" Character: Direct, ironic, perceptive, zero rose-colored glasses — but always
-   professional and grounded in Rider-Waite-Smith, Crowley Thoth, Marseille, and Golden Dawn canons.
-3. Post-Session Banter: When the user simply greets her, thanks her after a reading, or reacts emotionally
-   ("Ну ты и стерва!", "Ого, прям в точку!"), she replies with a witty, concise remark without drawing a new spread.
+2. Fast LLM Timeouts & Guardrails: Never hangs or promises "сейчас вернусь с ответом" without immediately
+   drawing and interpreting the spread.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Dict, List, Optional
@@ -34,7 +33,7 @@ ARCANA_SYSTEM_PROMPT = """Ты — АРКАНА (Arcana), профессиона
 """
 
 
-async def call_llm(
+async def _call_llm_inner(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.55,
@@ -42,13 +41,12 @@ async def call_llm(
 ) -> Optional[str]:
     if GEMINI_API_KEY:
         models_to_try = [
+            "gemini-2.5-flash",
             "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
             "gemini-flash-lite-latest",
-            "gemini-3.1-pro-preview",
-            "gemma-4-31b-it",
+            "gemini-2.0-flash",
         ]
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=18.0) as client:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
                 gen_config: Dict = {"temperature": temperature}
@@ -75,9 +73,9 @@ async def call_llm(
                     continue
 
     if GROQ_API_KEY:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=22.0) as client:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload: Dict = {
+            payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -97,6 +95,21 @@ async def call_llm(
     return None
 
 
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.55,
+    json_mode: bool = False,
+) -> Optional[str]:
+    try:
+        return await asyncio.wait_for(
+            _call_llm_inner(system_prompt, user_prompt, temperature=temperature, json_mode=json_mode),
+            timeout=42.0,
+        )
+    except Exception:
+        return None
+
+
 def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     """
     Returns True ONLY if the message is a pure greeting, post-session reaction/thanks,
@@ -111,7 +124,6 @@ def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     if not cleaned:
         return True
 
-    # Any question or substantive topic means it's a professional session request, NOT smalltalk!
     substantive_markers = re.search(
         r"(\?|расклад|карт|погадай|разложи|вытяни|триплет|крест|вокзал|таро|аркан|дно|дне|квинт|башн|отшельник|дьявол|шут|маг|жриц|императр|император|влюблен|колесниц|сил|колесо|повешен|смерт|умерен|звезд|лун|солнц|суд|мир|туз|корол|рыцар|паж|кубк|меч|жезл|пентакл|работ|карьер|деньг|финанс|бизнес|доход|отношен|любов|чувств|думает|намерен|скрывает|муж|парн|девушк|жен|бывш|выбор|стоит\s+ли|получится|будущ|перспектив|месяц|год|недел|напишет|позвонит|вернется|вернётся|почему\s+он|почему\s+она|что\s+делать|как\s+быть|что\s+между|что\s+ждёт|что\s+ждет|посмотри)",
         cleaned,
@@ -136,10 +148,6 @@ def rule_based_extract_tarot_dialog(
     """
     Professional-First Tarot intent extractor:
     - Any substantive question about life/relationships/work/choices triggers a Tarot reading!
-    - If no spread exists yet or user asks for a new spread/topic -> draws a new spread ("new_spread").
-    - If a spread already exists and user asks a follow-up question -> analyzes existing spread ("followup_on_existing_spread").
-    - If user says only "погадай мне" with zero topic -> asks for topic ("need_more_info").
-    - Only pure greetings or post-session reactions trigger "casual_chat".
     """
     saved_profile = saved_profile or {}
     user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
@@ -148,7 +156,6 @@ def rule_based_extract_tarot_dialog(
 
     has_saved_spread = bool(saved_profile.get("last_spread"))
 
-    # Strip wake word and generic "pull cards" command to see if there is an actual topic/question
     cleaned_topic = re.sub(
         r"(?:привет|здравствуй(?:те)?|аркана|аркану|аркане|арканой|arcana|arkana|погадай(?:\s+мне)?|сделай(?:\s+мне)?\s+расклад|разложи(?:\s+мне)?\s+карты|вытяни(?:\s+мне)?\s+карты|посмотри(?:\s+мне)?\s+на\s+картах|[!?,.\s])+",
         " ",
@@ -156,7 +163,7 @@ def rule_based_extract_tarot_dialog(
         flags=re.I,
     ).strip()
 
-    has_topic_in_msg = len(cleaned_topic) >= 5 or ("карта дня" in low_last or "карту дня" in low_last)
+    has_topic_in_msg = len(cleaned_topic) >= 2 or ("карта дня" in low_last or "карту дня" in low_last)
 
     if any(w in low_last for w in ("вокзал", "отношен", "чувств", "любит", "партнер", "партнёр", "между нами", "бывш", "думает", "напишет", "вернется", "вернётся")):
         spread_type = "relationship"
@@ -183,7 +190,6 @@ def rule_based_extract_tarot_dialog(
         has_all = False
         draw_new = False
     elif not has_topic_in_msg and not has_saved_spread:
-        # e.g. "Аркана, погадай мне" with no topic at all
         intent = "need_more_info"
         has_all = False
         draw_new = False
@@ -192,7 +198,6 @@ def rule_based_extract_tarot_dialog(
         has_all = True
         draw_new = True
     else:
-        # We already have a drawn spread in this session, and the user is asking a follow-up question!
         intent = "followup_on_existing_spread"
         has_all = True
         draw_new = False
@@ -245,6 +250,7 @@ async def generate_arcana_chat_response(
     if missing_info_hint:
         task_block = (
             f"{missing_info_hint}\n"
+            "СТРОГОЕ ПРАВИЛО: НЕ обещай «сейчас разложу и вернусь с ответом», пока кверент не назвал тему! "
             "Ответь коротко и с фирменной иронией профессионального таролога Арканы: скажи, что колода уже в руках, и уточни, какую именно ситуацию, человека или сферу мы сейчас смотрим."
         )
     else:
@@ -257,7 +263,10 @@ async def generate_arcana_chat_response(
 
     ans = await call_llm(ARCANA_SYSTEM_PROMPT, prompt, temperature=0.65, json_mode=False)
     if ans and len(ans.strip()) > 10:
-        return ans.strip()
+        clean_ans = ans.strip()
+        if missing_info_hint and re.search(r"(сейчас\s+(?:разложу|вытяну|посмотрю|вернусь)|вернусь\s+с\s+ответом|минутку)", clean_ans, re.I):
+            return "🃏 Колода уже у меня в руках, дорогая. Формулируй запрос чётко: **на кого или на какую ситуацию** раскладываем?"
+        return clean_ans
 
     if missing_info_hint:
         return "🃏 Колода уже у меня в руках, дорогая. Формулируй запрос чётко: **на кого или на какую ситуацию** раскладываем?"

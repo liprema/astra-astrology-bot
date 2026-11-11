@@ -331,12 +331,21 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         and message.reply_to_message.from_user.id == bot.id
     )
     saved_profile = store.get_profile(chat_id, user_id)
-    # In group chats, auto-continue without wake word only if the user is answering a pending data question (within 15 min)
+    profile_incomplete = not (
+        saved_profile.get("date_str") and saved_profile.get("time_str") and saved_profile.get("place_city")
+    )
+    # In group chats, auto-continue without wake word if the user is answering a pending data question (within 15 min)
     awaiting_data_in_group = (
         not is_private
         and store.is_recently_active(chat_id, user_id, ttl_seconds=900)
-        and not saved_profile.get("date_str")
-        and bool(re.search(r"(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{1,2}[:.]\d{2}|москв|петербург|спб|екатеринбург|казан|новосибирск|краснодар|сочи|минск|алмат|киев|ташкент|баку|ереван|тбилис|варшав|берлин|лондон|париж|дубай)", text, re.I))
+        and profile_incomplete
+        and bool(
+            re.search(
+                r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+(?:январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр)|\b(?:[01]?\d|2[0-3])[:.\-][0-5]\d\b|час|врем[яени]\s+не\s+знаю|г\.|город|москв|мск|петербург|питер|спб|екатеринбург|екб|казан|новосибирск|краснодар|сочи|самар|нижн|ростов|уф[ае]|красноярск|воронеж|перм|волгоград|саратов|тюмен|тольятти|ижевск|барнаул|ульяновск|иркутск|хабаровск|ярославл|владивосток|томск|оренбург|кемеров|рязан|астрахан|пенз|липецк|киров|тул[ае]|калининград|минск|алмат|астан|киев|ташкент|баку|ереван|тбилис|варшав|берлин|лондон|париж|дуба)",
+                text,
+                re.I,
+            )
+        )
     )
 
     if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
@@ -402,87 +411,98 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
-    geo = await asyncio.to_thread(resolve_place, place_query)
-    if not geo:
-        ask_city_again = (
-            f"✨ Солнце моё, не могу найти на карте место **«{place_query}»**.\n"
-            "Напиши, пожалуйста, название города чуть точнее (или ближайший крупный город — дату и время я уже бережно сохранила)!"
-        )
-        store.add_message(chat_id, user_id, "assistant", ask_city_again)
-        await ack_msg.edit_text(markdown_to_telegram_html(ask_city_again), parse_mode=ParseMode.HTML)
-        return
-
     try:
-        if date_str == "NOW" or time_str == "NOW":
-            import pytz
-            tz_obj = pytz.timezone(geo.tz_name)
-            dt_local = datetime.datetime.now(tz_obj).replace(tzinfo=None)
-        else:
-            d_parts = [int(x) for x in re.split(r"[./-]", date_str)]
-            t_parts = [int(x) for x in re.split(r"[:.]", time_str)]
-            dt_local = datetime.datetime(d_parts[2], d_parts[1], d_parts[0], t_parts[0], t_parts[1])
-    except Exception:
-        ask_date_again = (
-            "✨ Подскажи, пожалуйста, дату и время в привычном формате `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `15.05.1995 14:30`), чтобы эфемериды посчитали всё до секунды!"
-        )
-        store.add_message(chat_id, user_id, "assistant", ask_date_again)
-        await ack_msg.edit_text(markdown_to_telegram_html(ask_date_again), parse_mode=ParseMode.HTML)
-        return
+        geo = await asyncio.to_thread(resolve_place, place_query)
+        if not geo:
+            ask_city_again = (
+                f"✨ Солнце моё, не могу найти на карте место **«{place_query}»**.\n"
+                "Напиши, пожалуйста, название города чуть точнее (или ближайший крупный город — дату и время я уже бережно сохранила)!"
+            )
+            store.add_message(chat_id, user_id, "assistant", ask_city_again)
+            await ack_msg.edit_text(markdown_to_telegram_html(ask_city_again), parse_mode=ParseMode.HTML)
+            return
 
-    chart = await asyncio.to_thread(
-        calculate_full_chart,
-        dt_local,
-        geo.lat,
-        geo.lon,
-        geo.tz_name,
-        place_label=place_query,
-        subject_name=subject_name,
-        chart_type=chart_type,
-    )
-
-    if send_photo:
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-        img_filename = f"chart_{chat_id}_{int(time.time())}.png"
-        img_path = CHARTS_DIR / img_filename
-        await asyncio.to_thread(render_chart_image, chart, img_path)
-
-        photo_caption = (
-            f"✨ **Натальная карта: {subject_name}**\n"
-            f"📅 `{chart['dt_local_str']}` • 📍 {place_query}\n"
-            f"🏛 Дома: {chart['house_system']} + Полнознаковая система | {chart['hellenistic_medieval']['sect']}\n"
-            f"⬆️ **Асцендент (ASC):** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
-        )
-        await message.reply_photo(
-            photo=FSInputFile(img_path),
-            caption=markdown_to_telegram_html(photo_caption),
-            parse_mode=ParseMode.HTML,
-        )
-        store.update_profile(chat_id, user_id, {"has_rendered_chart": True})
-
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    user_q = analysis.get("user_question") or text
-    search_query = f"{user_q} {chart['asc']['sign']} Солнце {chart['planets'][0]['sign']} Луна {chart['planets'][1]['sign']} {chart_type}"
-    rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 6)
-
-    reading = await generate_astrological_interpretation(
-        chart=chart,
-        user_question=user_q,
-        rag_passages=rag_passages,
-        history_messages=history,
-        is_followup=(not send_photo),
-    )
-    store.add_message(chat_id, user_id, "assistant", reading)
-
-    try:
-        await ack_msg.delete()
-    except Exception:
-        pass
-
-    for part in split_html_telegram_message(reading):
         try:
-            await message.reply(part, parse_mode=ParseMode.HTML)
+            if date_str == "NOW" or time_str == "NOW":
+                import pytz
+                tz_obj = pytz.timezone(geo.tz_name)
+                dt_local = datetime.datetime.now(tz_obj).replace(tzinfo=None)
+            else:
+                d_parts = [int(x) for x in re.split(r"[./-]", date_str)]
+                t_parts = [int(x) for x in re.split(r"[:.\-]", time_str)]
+                dt_local = datetime.datetime(d_parts[2], d_parts[1], d_parts[0], t_parts[0], t_parts[1])
         except Exception:
-            await message.reply(strip_html_tags(part))
+            ask_date_again = (
+                "✨ Подскажи, пожалуйста, дату и время в формате `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `15.05.1995 14:30`), чтобы эфемериды посчитали всё до секунды!"
+            )
+            store.add_message(chat_id, user_id, "assistant", ask_date_again)
+            await ack_msg.edit_text(markdown_to_telegram_html(ask_date_again), parse_mode=ParseMode.HTML)
+            return
+
+        chart = await asyncio.to_thread(
+            calculate_full_chart,
+            dt_local,
+            geo.lat,
+            geo.lon,
+            geo.tz_name,
+            place_label=place_query,
+            subject_name=subject_name,
+            chart_type=chart_type,
+        )
+
+        if send_photo:
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+                img_filename = f"chart_{chat_id}_{int(time.time())}.png"
+                img_path = CHARTS_DIR / img_filename
+                await asyncio.to_thread(render_chart_image, chart, img_path)
+
+                photo_caption = (
+                    f"✨ **Натальная карта: {subject_name}**\n"
+                    f"📅 `{chart['dt_local_str']}` • 📍 {place_query}\n"
+                    f"🏛 Дома: {chart['house_system']} + Полнознаковая система | {chart['hellenistic_medieval']['sect']}\n"
+                    f"⬆️ **Асцендент (ASC):** {chart['asc']['formatted']} | **MC:** {chart['mc']['formatted']}"
+                )
+                await message.reply_photo(
+                    photo=FSInputFile(img_path),
+                    caption=markdown_to_telegram_html(photo_caption),
+                    parse_mode=ParseMode.HTML,
+                )
+                store.update_profile(chat_id, user_id, {"has_rendered_chart": True})
+            except Exception as photo_err:
+                logger.error("Chart photo send error: %s", photo_err)
+
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        user_q = analysis.get("user_question") or text
+        search_query = f"{user_q} {chart['asc']['sign']} Солнце {chart['planets'][0]['sign']} Луна {chart['planets'][1]['sign']} {chart_type}"
+        rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 6)
+
+        reading = await generate_astrological_interpretation(
+            chart=chart,
+            user_question=user_q,
+            rag_passages=rag_passages,
+            history_messages=history,
+            is_followup=(not send_photo),
+        )
+        store.add_message(chat_id, user_id, "assistant", reading)
+
+        try:
+            await ack_msg.delete()
+        except Exception:
+            pass
+
+        for part in split_html_telegram_message(reading):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
+    except Exception as exc:
+        logger.exception("Error while processing astrological chart: %s", exc)
+        err_text = "✨ Произошла секундная заминка при расчёте эфемерид — повтори, пожалуйста, своё последнее сообщение!"
+        try:
+            await ack_msg.edit_text(markdown_to_telegram_html(err_text), parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply(err_text)
 
 
 async def health_handler(request: web.Request) -> web.Response:

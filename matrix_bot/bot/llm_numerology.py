@@ -5,14 +5,12 @@ AI Numerology Orchestrator & Multi-Provider LLM Client for MATRIX ("Матрик
    On ANY substantive question about personality, money, destiny, karma, relationships, or forecast,
    she immediately analyzes the user's Matrix of Destiny & Pythagorean Square (or asks for the birth date
    if not yet known).
-2. Eccentric Mad-Genius Character: High-energy, passionately obsessed with numbers, matrices, and codes,
-   speaking in feminine gender ("я посчитала", "я увидела в твоей матрице").
-3. Post-Session Banter: When the user simply greets her, thanks her after a calculation, or reacts
-   emotionally ("Ну ты и сумасшедшая!", "Ого, спасибо!"), she replies concisely in character without
-   re-dumping the entire matrix report.
+2. Robust Date & Name Extraction: Understands DD.MM.YYYY, DD.MM.YY, YYYY-MM-DD, and verbal Russian months
+   ("15 мая 1998 Полина"), and never promises "сейчас вернусь с ответом" without immediately running the engine.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Dict, List, Optional, Tuple
@@ -37,8 +35,23 @@ MATRIX_SYSTEM_PROMPT = """Ты — МАТРИКС (она же Матрица / 
 - Во время разбора давай глубокую, точную, насыщенную цифрами и смыслами аналитику со ссылками на школы (и в цитате `> ...` показывай альтернативный взгляд другой школы). А когда сессия сделана и кверент благодарит или шутит — живо и ярко поддержи разговор!
 """
 
+RU_MONTHS = {
+    "январ": 1,
+    "феврал": 2,
+    "март": 3,
+    "апрел": 4,
+    "ма": 5,
+    "июн": 6,
+    "июл": 7,
+    "август": 8,
+    "сентябр": 9,
+    "октябр": 10,
+    "ноябр": 11,
+    "декабр": 12,
+}
 
-async def call_llm(
+
+async def _call_llm_inner(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.58,
@@ -46,13 +59,12 @@ async def call_llm(
 ) -> Optional[str]:
     if GEMINI_API_KEY:
         models_to_try = [
+            "gemini-2.5-flash",
             "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
             "gemini-flash-lite-latest",
-            "gemini-3.1-pro-preview",
-            "gemma-4-31b-it",
+            "gemini-2.0-flash",
         ]
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=18.0) as client:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
                 gen_config: Dict = {"temperature": temperature}
@@ -79,9 +91,9 @@ async def call_llm(
                     continue
 
     if GROQ_API_KEY:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=22.0) as client:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload: Dict = {
+            payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -101,6 +113,52 @@ async def call_llm(
     return None
 
 
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.58,
+    json_mode: bool = False,
+) -> Optional[str]:
+    try:
+        return await asyncio.wait_for(
+            _call_llm_inner(system_prompt, user_prompt, temperature=temperature, json_mode=json_mode),
+            timeout=42.0,
+        )
+    except Exception:
+        return None
+
+
+def _normalize_year(y: int) -> int:
+    if y < 100:
+        return (2000 + y) if y <= 29 else (1900 + y)
+    return y
+
+
+def _extract_dates_from_text(text: str) -> List[str]:
+    results: List[str] = []
+    for m in re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b", text):
+        d, mo, y = int(m.group(1)), int(m.group(2)), _normalize_year(int(m.group(3)))
+        if 1 <= d <= 31 and 1 <= mo <= 12 and 1900 <= y <= 2035:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    for m in re.finditer(r"\b(19\d{2}|20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b", text):
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    month_pattern = r"\b(\d{1,2})\s+(январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])(?:\s+|[,\s]+)(\d{2,4})\b"
+    for m in re.finditer(month_pattern, text, re.I):
+        d = int(m.group(1))
+        m_word = m.group(2).lower()
+        y = _normalize_year(int(m.group(3)))
+        mo = 0
+        for stem, idx in RU_MONTHS.items():
+            if m_word.startswith(stem):
+                mo = idx
+                break
+        if 1 <= d <= 31 and 1 <= mo <= 12 and 1900 <= y <= 2035:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    return results
+
+
 def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     """
     Returns True ONLY if the message is a pure greeting, post-session reaction/thanks,
@@ -115,7 +173,6 @@ def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     if not cleaned:
         return True
 
-    # Any substantive question or topic means it's a professional numerology request!
     substantive_markers = re.search(
         r"(\d|матриц|пифагор|психоматриц|числ|цифр|код|аркан|хвост|канал|предназначен|чжп|дхарм|муланк|санкхь|халдей|совместим|работ|карьер|деньг|финанс|бизнес|доход|богатств|професси|талант|сил\w+\s+сторон|слаб\w+\s+сторон|характер|воля|энерги|логик|интуиц|удач|везен|отношен|любов|муж|парн|девушк|жен|бывш|брак|сем[ья]|выбор|стоит\s+ли|почему\s+у\s+меня|что\s+меня\s+ждет|что\s+ждёт|что\s+с\s+мо|прогноз|год|месяц|период|пик|вызов|карм|долг|посчитай|рассчитай|разбери|посмотри)",
         cleaned,
@@ -148,31 +205,26 @@ def rule_based_extract_matrix_dialog(
     last_msg = user_msgs[-1] if user_msgs else ""
     low_last = last_msg.lower()
 
-    all_date_matches = list(re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", combined_user))
-    last_date_matches = list(re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", last_msg))
+    all_dates = _extract_dates_from_text(combined_user)
+    last_dates = _extract_dates_from_text(last_msg)
 
     date_str = saved_profile.get("date_str")
     partner_date_str = saved_profile.get("partner_date_str")
     new_data_in_last_msg = False
 
-    if len(last_date_matches) >= 2:
-        d1, m1, y1 = int(last_date_matches[-2].group(1)), int(last_date_matches[-2].group(2)), int(last_date_matches[-2].group(3))
-        d2, m2, y2 = int(last_date_matches[-1].group(1)), int(last_date_matches[-1].group(2)), int(last_date_matches[-1].group(3))
-        nd1 = f"{d1:02d}.{m1:02d}.{y1:04d}"
-        nd2 = f"{d2:02d}.{m2:02d}.{y2:04d}"
+    if len(last_dates) >= 2:
+        nd1, nd2 = last_dates[-2], last_dates[-1]
         if nd1 != date_str or nd2 != partner_date_str:
             new_data_in_last_msg = True
         date_str = nd1
         partner_date_str = nd2
-    elif len(last_date_matches) == 1:
-        d1, m1, y1 = int(last_date_matches[0].group(1)), int(last_date_matches[0].group(2)), int(last_date_matches[0].group(3))
-        nd1 = f"{d1:02d}.{m1:02d}.{y1:04d}"
+    elif len(last_dates) == 1:
+        nd1 = last_dates[0]
         if nd1 != date_str:
             new_data_in_last_msg = True
         date_str = nd1
-    elif not date_str and all_date_matches:
-        d1, m1, y1 = int(all_date_matches[-1].group(1)), int(all_date_matches[-1].group(2)), int(all_date_matches[-1].group(3))
-        date_str = f"{d1:02d}.{m1:02d}.{y1:04d}"
+    elif not date_str and all_dates:
+        date_str = all_dates[-1]
 
     name_match = re.search(
         r"(?:меня\s+зовут|имя|фио|для|карта\s+для|матрица\s+для)\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+){0,2})",
@@ -180,6 +232,29 @@ def rule_based_extract_matrix_dialog(
         re.I,
     )
     full_name = saved_profile.get("full_name") or (name_match.group(1).strip() if name_match else "")
+
+    # Also extract name if user sent "15.05.1998 Полина" or "Полина, 15.05.1998"
+    if not full_name and last_dates:
+        stripped = re.sub(r"(?:матрикс\w*|матриц\w*|matrix|привет\w*|посмотри\w*|посчитай\w*|рассчитай\w*)", " ", last_msg, flags=re.I)
+        stripped = re.sub(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", " ", stripped)
+        stripped = re.sub(
+            r"\b\d{1,2}\s+(?:январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])\s*\d{2,4}\b",
+            " ",
+            stripped,
+            flags=re.I,
+        )
+        stripped = re.sub(r"[,.!?;:()\"'«»—\d]+", " ", stripped).strip()
+        words = [w for w in stripped.split() if len(w) >= 2 and re.match(r"^[А-ЯЁA-Zа-яёa-z\-]+$", w)]
+        if 1 <= len(words) <= 2:
+            cand = " ".join(words)
+            if not re.search(r"^(год|года|спасибо|пожалуйста|хорошо|ладно|давай|ок)$", cand, re.I):
+                full_name = cand.title()
+
+    effective_question = last_msg
+    if new_data_in_last_msg and len(user_msgs) >= 2:
+        prev_questions = [m for m in user_msgs[:-1] if not _is_pure_smalltalk_or_reaction(m)]
+        if prev_questions:
+            effective_question = f"{prev_questions[-1]} (Данные: {last_msg})"
 
     has_saved_date = bool(date_str)
     had_photo = bool(saved_profile.get("has_rendered_matrix"))
@@ -212,7 +287,7 @@ def rule_based_extract_matrix_dialog(
         "full_name": full_name,
         "date_str": date_str,
         "partner_date_str": partner_date_str,
-        "user_question": last_msg,
+        "user_question": effective_question,
         "missing_info_question_ru": missing_hint,
     }
 
@@ -246,8 +321,9 @@ async def generate_matrix_chat_response(
 
     if missing_info_hint:
         task_block = (
-            f"Кверент задал вопрос, для которого нужен профессиональный нумерологический расчёт. {missing_info_hint}\n"
-            "Ответь в ЖЕНСКОМ роде в своём ярком, эксцентричном, чуть безумном стиле профессионального нумеролога Матрикс: коротко откликнись на запрос и попроси написать дату рождения (`ДД.ММ.ГГГГ`) и имя, чтобы сразу построить Матрицу."
+            f"Кверент задал вопрос, но ещё не написал дату рождения для расчёта. {missing_info_hint}\n"
+            "СТРОГОЕ ПРАВИЛО: НЕ обещай «сейчас посчитаю и вернусь с ответом», потому что даты рождения ещё нет! "
+            "Ответь в ЖЕНСКОМ роде коротко (2–3 предложения) в ярком стиле профессионального нумеролога Матрикс и прямо попроси написать дату рождения (`ДД.ММ.ГГГГ`) и имя."
         )
     else:
         task_block = (
@@ -259,7 +335,10 @@ async def generate_matrix_chat_response(
 
     ans = await call_llm(MATRIX_SYSTEM_PROMPT, prompt, temperature=0.68, json_mode=False)
     if ans and len(ans.strip()) > 10:
-        return ans.strip()
+        clean_ans = ans.strip()
+        if missing_info_hint and re.search(r"(сейчас\s+(?:построю|рассчитаю|посчитаю|посмотрю|вернусь)|вернусь\s+с\s+ответом|минутку)", clean_ans, re.I):
+            return f"🔢 У меня уже калькулятор искрит посчитать твой запрос! {missing_info_hint}"
+        return clean_ans
 
     if missing_info_hint:
         return f"🔢 У меня уже калькулятор искрит посчитать твой запрос! {missing_info_hint}"

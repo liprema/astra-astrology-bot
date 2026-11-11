@@ -4,19 +4,22 @@ AI Astrological Orchestrator & Multi-Provider LLM Client (Gemini / Groq / OpenRo
 1. Professional First: Astra ("Астра") is first and foremost a top-tier professional astrologer.
    On ANY substantive question about life, personality, relationships, career, money, future, or timing,
    she immediately looks at the natal/horary chart (or asks for birth date, time, and city if not yet saved).
-2. Post-Session & Smalltalk Capable: When the user simply greets her, reacts after a session ("Спасибо!",
-   "Ого, как точно!"), or makes small talk without a new analytical question, she replies warmly and naturally
-   without re-dumping the entire chart.
+2. Robust Data Extraction: Understands dates with dots/slashes/hyphens, 2-digit years, Russian month names
+   ("15 мая 1998"), times in any format ("14:30", "14-30", "в 14 часов", "время не знаю" -> 12:00),
+   and cities in any case or word order ("москва", "в Москве", "Санкт-Петербург", etc.).
+3. Never Hangs on Data Collection: Never promises "сейчас вернусь с ответом" without immediately running
+   the calculation engine.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
-from bot.astro_engine import format_chart_for_llm
+from bot.astro_engine import KNOWN_CITIES, format_chart_for_llm
 from bot.config import GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
 
 ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), профессиональный астролог-эксперт высшего класса, владеющий всеми классическими и современными астрологическими традициями:
@@ -32,8 +35,113 @@ ASTRA_SYSTEM_PROMPT = """Ты — АСТРА (Astra), профессиональ
 - А когда основная сессия/разбор уже сделаны и человек делится впечатлениями, благодарит, шутит или просто перекидывается с тобой парой фраз — ты легко, тепло и с достоинством поддерживаешь живой человеческий разговор.
 """
 
+RU_MONTHS = {
+    "январ": 1,
+    "феврал": 2,
+    "март": 3,
+    "апрел": 4,
+    "ма": 5,
+    "июн": 6,
+    "июл": 7,
+    "август": 8,
+    "сентябр": 9,
+    "октябр": 10,
+    "ноябр": 11,
+    "декабр": 12,
+}
 
-async def call_llm(
+# Preems/inflections of common cities -> canonical city name
+CITY_STEMS: List[Tuple[str, str]] = [
+    ("санкт-петербург", "Санкт-Петербург"),
+    ("санкт петербург", "Санкт-Петербург"),
+    ("петербург", "Санкт-Петербург"),
+    ("питер", "Санкт-Петербург"),
+    ("спб", "Санкт-Петербург"),
+    ("нижн\\w+\\s+новгород", "Нижний Новгород"),
+    ("ростов\\w*[-\\s]+на[-\\s]+дон\\w*", "Ростов-на-Дону"),
+    ("набережн\\w+\\s+челн\\w*", "Набережные Челны"),
+    ("улан[-\\s]+удэ", "Улан-Удэ"),
+    ("тель[-\\s]+авив", "Тель-Авив"),
+    ("нью[-\\s]+йорк", "Нью-Йорк"),
+    ("москв", "Москва"),
+    ("мск", "Москва"),
+    ("новосибирск", "Новосибирск"),
+    ("екатеринбург", "Екатеринбург"),
+    ("екб", "Екатеринбург"),
+    ("казан", "Казань"),
+    ("челябинск", "Челябинск"),
+    ("самар", "Самара"),
+    ("омск", "Омск"),
+    ("ростов", "Ростов-на-Дону"),
+    ("уф[аеыу]", "Уфа"),
+    ("красноярск", "Красноярск"),
+    ("воронеж", "Воронеж"),
+    ("перм", "Пермь"),
+    ("волгоград", "Волгоград"),
+    ("краснодар", "Краснодар"),
+    ("сочи", "Сочи"),
+    ("саратов", "Саратов"),
+    ("тюмен", "Тюмень"),
+    ("тольятти", "Тольятти"),
+    ("ижевск", "Ижевск"),
+    ("барнаул", "Барнаул"),
+    ("ульяновск", "Ульяновск"),
+    ("иркутск", "Иркутск"),
+    ("хабаровск", "Хабаровск"),
+    ("ярославл", "Ярославль"),
+    ("владивосток", "Владивосток"),
+    ("махачкал", "Махачкала"),
+    ("томск", "Томск"),
+    ("оренбург", "Оренбург"),
+    ("кемеров", "Кемерово"),
+    ("новокузнецк", "Новокузнецк"),
+    ("рязан", "Рязань"),
+    ("астрахан", "Астрахань"),
+    ("пенз", "Пенза"),
+    ("липецк", "Липецк"),
+    ("киров", "Киров"),
+    ("чебоксар", "Чебоксары"),
+    ("тул[аеыу]", "Тула"),
+    ("калининград", "Калининград"),
+    ("курск", "Курск"),
+    ("ставропол", "Ставрополь"),
+    ("твер", "Тверь"),
+    ("магнитогорск", "Магнитогорск"),
+    ("иванов", "Иваново"),
+    ("брянск", "Брянск"),
+    ("белгород", "Белгород"),
+    ("сургут", "Сургут"),
+    ("владимир", "Владимир"),
+    ("архангельск", "Архангельск"),
+    ("чит[аеыу]", "Чита"),
+    ("симферопол", "Симферополь"),
+    ("севастопол", "Севастополь"),
+    ("минск", "Минск"),
+    ("алмат", "Алматы"),
+    ("астан", "Астана"),
+    ("киев", "Киев"),
+    ("ташкент", "Ташкент"),
+    ("баку", "Баку"),
+    ("ереван", "Ереван"),
+    ("тбилис", "Тбилиси"),
+    ("бишкек", "Бишкек"),
+    ("душанбе", "Душанбе"),
+    ("кишинев", "Кишинёв"),
+    ("кишинёв", "Кишинёв"),
+    ("риг[аеиу]", "Рига"),
+    ("вильнюс", "Вильнюс"),
+    ("таллин", "Таллин"),
+    ("варшав", "Варшава"),
+    ("берлин", "Берлин"),
+    ("париж", "Париж"),
+    ("лондон", "Лондон"),
+    ("стамбул", "Стамбул"),
+    ("анталь", "Анталья"),
+    ("дуба[йеи]", "Дубай"),
+]
+
+
+async def _call_llm_inner(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.48,
@@ -41,13 +149,12 @@ async def call_llm(
 ) -> Optional[str]:
     if GEMINI_API_KEY:
         models_to_try = [
+            "gemini-2.5-flash",
             "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
             "gemini-flash-lite-latest",
-            "gemini-3.1-pro-preview",
-            "gemma-4-31b-it",
+            "gemini-2.0-flash",
         ]
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=18.0) as client:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
                 gen_config: Dict = {"temperature": temperature}
@@ -74,9 +181,9 @@ async def call_llm(
                     continue
 
     if GROQ_API_KEY:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=22.0) as client:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload: Dict = {
+            payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -96,6 +203,132 @@ async def call_llm(
     return None
 
 
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.48,
+    json_mode: bool = False,
+) -> Optional[str]:
+    try:
+        return await asyncio.wait_for(
+            _call_llm_inner(system_prompt, user_prompt, temperature=temperature, json_mode=json_mode),
+            timeout=42.0,
+        )
+    except Exception:
+        return None
+
+
+def _normalize_year(y: int) -> int:
+    if y < 100:
+        return (2000 + y) if y <= 29 else (1900 + y)
+    return y
+
+
+def _extract_dates_from_text(text: str) -> List[str]:
+    results: List[str] = []
+    # 1. Numeric DD.MM.YYYY or DD.MM.YY
+    for m in re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b", text):
+        d, mo, y = int(m.group(1)), int(m.group(2)), _normalize_year(int(m.group(3)))
+        if 1 <= d <= 31 and 1 <= mo <= 12 and 1900 <= y <= 2035:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    # 2. ISO YYYY-MM-DD
+    for m in re.finditer(r"\b(19\d{2}|20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b", text):
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    # 3. Verbal Russian months: "15 мая 1998" or "15 мая 98"
+    month_pattern = r"\b(\d{1,2})\s+(январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])(?:\s+|[,\s]+)(\d{2,4})\b"
+    for m in re.finditer(month_pattern, text, re.I):
+        d = int(m.group(1))
+        m_word = m.group(2).lower()
+        y = _normalize_year(int(m.group(3)))
+        mo = 0
+        for stem, idx in RU_MONTHS.items():
+            if m_word.startswith(stem):
+                mo = idx
+                break
+        if 1 <= d <= 31 and 1 <= mo <= 12 and 1900 <= y <= 2035:
+            results.append(f"{d:02d}.{mo:02d}.{y:04d}")
+    return results
+
+
+def _extract_times_from_text(text: str) -> List[str]:
+    # Strip out full numeric dates first so "15.05.1998" doesn't match "15.05" as a time!
+    cleaned = re.sub(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", " ", text)
+    cleaned = re.sub(r"\b(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}\b", " ", cleaned)
+    results: List[str] = []
+
+    for m in re.finditer(r"(?<![\d./-])([01]?\d|2[0-3])[:.\-]([0-5]\d)(?![\d./-])", cleaned):
+        hh, mm = int(m.group(1)), int(m.group(2))
+        results.append(f"{hh:02d}:{mm:02d}")
+
+    # Verbal hours/minutes: "в 14 часов 30 минут" / "в 14 ч" / "в 9 утра"
+    for m in re.finditer(r"\b(?:в\s+)?([01]?\d|2[0-3])\s*(?:час(?:а|ов)?|ч\.?)\s*(?:([0-5]\d)\s*(?:мин(?:ут[аы]?)?|м\.?))?", cleaned, re.I):
+        hh = int(m.group(1))
+        mm = int(m.group(2)) if m.group(2) else 0
+        results.append(f"{hh:02d}:{mm:02d}")
+
+    # If user explicitly says they don't know their birth time, use 12:00 (noon cosmogram)
+    if re.search(r"(врем[яени]\s+не\s+знаю|не\s+знаю\s+врем|не\s+помню\s+врем|без\s+времени|точное\s+время\s+неизвестно)", cleaned, re.I):
+        results.append("12:00")
+
+    return results
+
+
+def _extract_city_from_text(text: str, last_msg: str, has_date_or_time: bool) -> Optional[str]:
+    # 1. Check explicit city prefixes ("г. Самара", "город Казань", "родилась в Москве", etc.)
+    prefix_matches = list(
+        re.finditer(
+            r"(?:г\.|город|гор\.|место(?:\s+рождения)?|локация|родил(?:ся|ась)\s+в|живу\s+в|нахожусь\s+в)[:\s]+([А-ЯЁA-Zа-яёa-z][А-ЯЁA-Zа-яёa-z\-]+(?:\s+[А-ЯЁA-Zа-яёa-z\-]+)?)",
+            text,
+            re.I,
+        )
+    )
+    if prefix_matches:
+        cand = prefix_matches[-1].group(1).strip()
+        # Check if cand matches a known city stem
+        for stem, canon in CITY_STEMS:
+            if re.search(r"\b" + stem, cand.lower()):
+                return canon
+        return cand.title()
+
+    # 2. Check known cities anywhere in last_msg first, then in full text
+    for scope in (last_msg, text):
+        low_scope = scope.lower()
+        for stem, canon in CITY_STEMS:
+            if re.search(r"(?<![а-яёa-z])" + stem + r"[а-яёa-z]*", low_scope):
+                return canon
+
+    # 3. Check word(s) right after or before date/time in last_msg (case-insensitive!)
+    stripped = re.sub(
+        r"(?:астра|astra|привет\w*|здравствуй\w*|посмотри\w*|построй\w*|натальн\w*|карт\w*|гороскоп\w*|моя|мне|я\s+родил\w*|дата\s+рождения|время\s+рождения|город\s+рождения|место\s+рождения)",
+        " ",
+        last_msg,
+        flags=re.I,
+    )
+    stripped = re.sub(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", " ", stripped)
+    stripped = re.sub(r"\b(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}\b", " ", stripped)
+    stripped = re.sub(
+        r"\b\d{1,2}\s+(?:январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])\s*\d{2,4}\b",
+        " ",
+        stripped,
+        flags=re.I,
+    )
+    stripped = re.sub(r"\b([01]?\d|2[0-3])[:.\-]([0-5]\d)\b", " ", stripped)
+    stripped = re.sub(r"[,.!?;:()\"'«»—]+", " ", stripped).strip()
+    stripped = re.sub(r"\s+", " ", stripped)
+
+    # If the user sent a message containing date/time + 1-2 words (like "15.05.1998 14:30 Балашиха" or just "Балашиха" when date/time is known)
+    if has_date_or_time and stripped:
+        words = [w for w in stripped.split() if len(w) >= 2 and w.lower() not in ("год", "года", "утра", "дня", "вечера", "ночи", "час", "часа", "часов", "минут")]
+        if 1 <= len(words) <= 2 and all(re.match(r"^[А-ЯЁA-Zа-яёa-z\-]+$", w) for w in words):
+            candidate = " ".join(words)
+            if not re.search(r"^(спасибо|пожалуйста|хорошо|ладно|понял|ясно|привет|давай|ок|нет|да)$", candidate, re.I):
+                return candidate.title()
+
+    return None
+
+
 def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     """
     Returns True ONLY if the message is a pure greeting, thank-you, post-session emotional reaction,
@@ -110,7 +343,6 @@ def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     if not cleaned:
         return True
 
-    # If the message contains any analytical/life/astrological question or topic, it is NOT smalltalk!
     substantive_markers = re.search(
         r"(\d|кар[т]|гороскоп|натал|хорар|дом|планет|солнц|лун|асцендент|венер|марс|сатурн|юпитер|меркур|уран|нептун|плутон|уз[ео]л|раху|кету|лилит|хирон|работ|карьер|деньг|финанс|бизнес|доход|отношен|любов|муж|парн|девушк|жен|бывш|брак|сем[ья]|дет[ией]|переезд|релокац|город|стран|здоров|болезн|выбор|стоит\s+ли|когда|почему\s+у\s+меня|что\s+меня\s+ждет|что\s+ждёт|что\s+с\s+мо|прогноз|год|месяц|недел|период|предназначен|талант|сил\w+\s+сторон|слаб\w+\s+сторон|характер|совместим|синастр|транзит|соляр|фирдар|профекц|формул)",
         cleaned,
@@ -118,7 +350,6 @@ def _is_pure_smalltalk_or_reaction(text: str) -> bool:
     if substantive_markers:
         return False
 
-    # Pure greetings, thanks, reactions, or "how are you / tell me about yourself"
     smalltalk_patterns = re.match(
         r"^(?:привет\w*|здравствуй\w*|добр\w+\s+(?:утро|день|вечер)|хай|хеллоу|алло|ты\s+тут|как\s+(?:дела|ты|жизнь|настроение)|что\s+делаешь|кто\s+ты|расскажи\s+о\s+себе|спасибо\w*|благодарю\w*|круто|супер|ого|вау|офигеть|в\s+точку|прям\s+про\s+меня|ты\s+лучшая|молодец|красотка|умница|понял[а]?|ясно|ок|хорошо|ладно|хаха\w*|ахах\w*)[\s\w,!-]*$",
         cleaned,
@@ -146,73 +377,58 @@ def rule_based_extract_dialog(
 
     is_horary = bool(re.search(r"(хорар|horary|карта\s+вопроса|посмотри\s+хорар)", low_last))
 
-    # Extract birth data from history + current message
-    date_matches = list(re.finditer(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", combined_user_text))
-    time_matches = list(re.finditer(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", combined_user_text))
-
     date_str = saved_profile.get("date_str")
     time_str = saved_profile.get("time_str")
     city_candidate = saved_profile.get("place_city")
     new_data_in_last_msg = False
 
-    last_date_m = re.search(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", last_msg)
-    if last_date_m:
-        d, m, y = int(last_date_m.group(1)), int(last_date_m.group(2)), int(last_date_m.group(3))
-        nd = f"{d:02d}.{m:02d}.{y:04d}"
+    last_dates = _extract_dates_from_text(last_msg)
+    all_dates = _extract_dates_from_text(combined_user_text)
+    if last_dates:
+        nd = last_dates[-1]
         if nd != date_str:
             new_data_in_last_msg = True
         date_str = nd
-    elif date_matches and not date_str:
-        m_obj = date_matches[-1]
-        d, m, y = int(m_obj.group(1)), int(m_obj.group(2)), int(m_obj.group(3))
-        date_str = f"{d:02d}.{m:02d}.{y:04d}"
+    elif all_dates and not date_str:
+        date_str = all_dates[-1]
     elif is_horary:
         date_str = "NOW"
         new_data_in_last_msg = True
 
-    last_time_m = re.search(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", last_msg)
-    if last_time_m:
-        hh, mm = int(last_time_m.group(1)), int(last_time_m.group(2))
-        nt = f"{hh:02d}:{mm:02d}"
+    last_times = _extract_times_from_text(last_msg)
+    all_times = _extract_times_from_text(combined_user_text)
+    if last_times:
+        nt = last_times[-1]
         if nt != time_str:
             new_data_in_last_msg = True
         time_str = nt
-    elif time_matches and not time_str:
-        t_obj = time_matches[-1]
-        hh, mm = int(t_obj.group(1)), int(t_obj.group(2))
-        time_str = f"{hh:02d}:{mm:02d}"
+    elif all_times and not time_str:
+        time_str = all_times[-1]
     elif is_horary:
         time_str = "NOW"
 
-    city_matches = list(
-        re.finditer(
-            r"(?:г\.|город|место|родил(?:ся|ась)\s+в|живу\s+в|нахожусь\s+в|локация|место\s+рождения)[:\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
-            combined_user_text,
-            re.I,
-        )
+    extracted_city = _extract_city_from_text(
+        combined_user_text,
+        last_msg,
+        has_date_or_time=bool(date_str or time_str),
     )
-    if city_matches:
-        nc = city_matches[-1].group(1).strip()
-        if nc != city_candidate:
+    if extracted_city:
+        if extracted_city != city_candidate:
             new_data_in_last_msg = True
-        city_candidate = nc
-    else:
-        after_time = list(
-            re.finditer(
-                r"\b(?:[01]?\d|2[0-3])[:.][0-5]\d(?:\s*\([^)]*\))?[,\s]+([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?)",
-                combined_user_text,
-            )
-        )
-        if after_time:
-            nc = after_time[-1].group(1).strip()
-            if nc != city_candidate:
-                new_data_in_last_msg = True
-            city_candidate = nc
-        elif not city_candidate and (date_str or time_str):
-            short_clean = re.sub(r"^(?:астра[,\s]*)", "", last_msg.strip(), flags=re.I).strip(" .,!?")
-            if re.match(r"^[А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+)?$", short_clean) and len(short_clean) >= 3:
-                city_candidate = short_clean
-                new_data_in_last_msg = True
+        city_candidate = extracted_city
+    elif is_horary and not city_candidate:
+        city_candidate = "Москва"
+
+    # Extract meaningful question from history if the last message was just supplying birth data!
+    effective_question = last_msg
+    if new_data_in_last_msg and len(user_msgs) >= 2:
+        # Check if previous user messages had a substantive question
+        prev_questions = [
+            m for m in user_msgs[:-1]
+            if not _is_pure_smalltalk_or_reaction(m)
+        ]
+        if prev_questions:
+            effective_question = f"{prev_questions[-1]} (Данные: {last_msg})"
 
     subject_name = saved_profile.get("subject_name") or ("Хорарный вопрос" if is_horary else "Натальная карта")
     has_all = bool(date_str and time_str and city_candidate)
@@ -230,7 +446,7 @@ def rule_based_extract_dialog(
     if not date_str:
         missing_parts.append("дату рождения (`ДД.ММ.ГГГГ`)")
     if not time_str:
-        missing_parts.append("точное время рождения (`ЧЧ:ММ`)")
+        missing_parts.append("точное время рождения (`ЧЧ:ММ`, а если не знаете — так и напишите «время не знаю»)")
     if not city_candidate:
         missing_parts.append("город рождения")
 
@@ -251,9 +467,9 @@ def rule_based_extract_dialog(
     missing_hint = ""
     if intent == "need_more_info":
         if known_parts and missing_parts:
-            missing_hint = f"Я уже записала {', '.join(known_parts)}. Для точного расчёта карты напишите ещё: {', '.join(missing_parts)}."
+            missing_hint = f"Я уже записала {', '.join(known_parts)}. Для точного расчёта карты напишите ещё: **{', '.join(missing_parts)}**."
         else:
-            missing_hint = f"Чтобы я посмотрела этот вопрос по вашей натальной карте, напишите, пожалуйста: {', '.join(missing_parts)} (или уточните, если хотите посмотреть хорарный вопрос на текущий момент)."
+            missing_hint = f"Чтобы я посмотрела этот вопрос по вашей натальной карте, напишите, пожалуйста: **{', '.join(missing_parts)}** (или уточните, если хотите посмотреть хорарный вопрос на текущий момент)."
 
     return {
         "intent": intent,
@@ -264,7 +480,7 @@ def rule_based_extract_dialog(
         "date_str": date_str,
         "time_str": time_str,
         "place_city": city_candidate,
-        "user_question": last_msg,
+        "user_question": effective_question,
         "missing_info_question_ru": missing_hint,
     }
 
@@ -298,8 +514,9 @@ async def generate_astra_chat_response(
 
     if missing_info_hint:
         task_block = (
-            f"Кверент обратился с запросом, для которого нужно построить карту. {missing_info_hint}\n"
-            "Ответь как чуткий, профессиональный астролог Астра: коротко откликнись по сути вопроса и попроси недостающие данные рождения (дату `ДД.ММ.ГГГГ`, точное время `ЧЧ:ММ` и город), чтобы сразу сделать точный разбор."
+            f"Кверент обратился с запросом, но в базе ещё не хватает данных для расчёта карты. {missing_info_hint}\n"
+            "СТРОГОЕ ПРАВИЛО: НЕ обещай «сейчас построю и вернусь с ответом» и НЕ пиши «подожди минутку, открываю карту», потому что данных ещё не хватает! "
+            "Ответь тепло и профессионально (2–3 предложения): коротко откликнись по сути вопроса и прямо попроси написать недостающие данные."
         )
     else:
         task_block = (
@@ -311,7 +528,11 @@ async def generate_astra_chat_response(
 
     ans = await call_llm(ASTRA_SYSTEM_PROMPT, prompt, temperature=0.55, json_mode=False)
     if ans and len(ans.strip()) > 10:
-        return ans.strip()
+        clean_ans = ans.strip()
+        # Guard against LLM hallucinating "I'll go calculate right now and come back" when data is still missing
+        if missing_info_hint and re.search(r"(сейчас\s+(?:построю|рассчитаю|посмотрю|вернусь)|вернусь\s+с\s+ответом|минутку)", clean_ans, re.I):
+            return f"✨ С удовольствием разберу ваш запрос по карте! {missing_info_hint}"
+        return clean_ans
 
     if missing_info_hint:
         return f"✨ С удовольствием посмотрю ваш запрос профессионально! {missing_info_hint}"

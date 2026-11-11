@@ -308,7 +308,13 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         not is_private
         and store.is_recently_active(chat_id, user_id, ttl_seconds=900)
         and not saved_profile.get("date_str")
-        and bool(re.search(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b", text))
+        and bool(
+            re.search(
+                r"(\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|\b(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр))",
+                text,
+                re.I,
+            )
+        )
     )
 
     if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
@@ -389,63 +395,74 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
-    num_data = await asyncio.to_thread(
-        calculate_full_numerology,
-        day=day,
-        month=month,
-        year=year,
-        full_name=full_name,
-        subject_label=subject_label,
-        partner_date=partner_tuple,
-    )
-
-    if send_photo:
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-        img_filename = f"matrix_{chat_id}_{int(time.time())}.png"
-        img_path = CHARTS_DIR / img_filename
-        await asyncio.to_thread(render_numerology_image, num_data, img_path)
-
-        dm = num_data["destiny_matrix_22"]
-        w = num_data["western"]
-        v = num_data["vedic"]
-        photo_caption = (
-            f"🔢 **Нумерологическая Матрица: {subject_label} ({num_data['date_str']})**\n"
-            f"🌟 **ЧЖП:** {w['life_path']} • **Финансовый код:** `{w['financial_code']}`\n"
-            f"💎 **Центр Матрицы Судьбы:** {ARCANA_22_NAMES[dm['center_comfort_zone']]}\n"
-            f"🧬 **Кармический хвост:** `{dm['karmic_tail']}` • **Денежный канал:** `{dm['money_channel']}`\n"
-            f"🕉 **Ведическая Санкхья:** Душа {v['soul_number']} ({v['soul_planet']}), Судьба {v['destiny_number']} ({v['destiny_planet']})"
-        )
-        await message.reply_photo(
-            photo=FSInputFile(img_path),
-            caption=markdown_to_telegram_html(photo_caption)[:1000],
-            parse_mode=ParseMode.HTML,
-        )
-        store.update_profile(chat_id, user_id, {"has_rendered_matrix": True})
-
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    user_q = analysis.get("user_question") or text
-    search_query = f"{user_q} Квадрат Пифагора Матрица Судьбы Санкхья Халдейская"
-    rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 5)
-
-    reading = await generate_numerology_interpretation(
-        data=num_data,
-        user_question=user_q,
-        rag_passages=rag_passages,
-        history_messages=history,
-        is_followup=(not send_photo),
-    )
-    store.add_message(chat_id, user_id, "assistant", reading)
-
     try:
-        await ack_msg.delete()
-    except Exception:
-        pass
+        num_data = await asyncio.to_thread(
+            calculate_full_numerology,
+            day=day,
+            month=month,
+            year=year,
+            full_name=full_name,
+            subject_label=subject_label,
+            partner_date=partner_tuple,
+        )
 
-    for part in split_html_telegram_message(reading):
+        if send_photo:
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+                img_filename = f"matrix_{chat_id}_{int(time.time())}.png"
+                img_path = CHARTS_DIR / img_filename
+                await asyncio.to_thread(render_numerology_image, num_data, img_path)
+
+                dm = num_data["destiny_matrix_22"]
+                w = num_data["western"]
+                v = num_data["vedic"]
+                photo_caption = (
+                    f"🔢 **Нумерологическая Матрица: {subject_label} ({num_data['date_str']})**\n"
+                    f"🌟 **ЧЖП:** {w['life_path']} • **Финансовый код:** `{w['financial_code']}`\n"
+                    f"💎 **Центр Матрицы Судьбы:** {ARCANA_22_NAMES[dm['center_comfort_zone']]}\n"
+                    f"🧬 **Кармический хвост:** `{dm['karmic_tail']}` • **Денежный канал:** `{dm['money_channel']}`\n"
+                    f"🕉 **Ведическая Санкхья:** Душа {v['soul_number']} ({v['soul_planet']}), Судьба {v['destiny_number']} ({v['destiny_planet']})"
+                )
+                await message.reply_photo(
+                    photo=FSInputFile(img_path),
+                    caption=markdown_to_telegram_html(photo_caption)[:1000],
+                    parse_mode=ParseMode.HTML,
+                )
+                store.update_profile(chat_id, user_id, {"has_rendered_matrix": True})
+            except Exception as photo_err:
+                logger.error("Matrix photo send error: %s", photo_err)
+
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        user_q = analysis.get("user_question") or text
+        search_query = f"{user_q} Квадрат Пифагора Матрица Судьбы Санкхья Халдейская"
+        rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 5)
+
+        reading = await generate_numerology_interpretation(
+            data=num_data,
+            user_question=user_q,
+            rag_passages=rag_passages,
+            history_messages=history,
+            is_followup=(not send_photo),
+        )
+        store.add_message(chat_id, user_id, "assistant", reading)
+
         try:
-            await message.reply(part, parse_mode=ParseMode.HTML)
+            await ack_msg.delete()
         except Exception:
-            await message.reply(strip_html_tags(part))
+            pass
+
+        for part in split_html_telegram_message(reading):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
+    except Exception as exc:
+        logger.exception("Error while processing Numerology Matrix: %s", exc)
+        err_text = "🔢 Цифры так разогнались, что калькулятор заискрил — повтори своё последнее сообщение ещё раз!"
+        try:
+            await ack_msg.edit_text(markdown_to_telegram_html(err_text), parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply(err_text)
 
 
 async def health_handler(request: web.Request) -> web.Response:

@@ -305,6 +305,11 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         and message.reply_to_message.from_user.id == bot.id
     )
     saved_profile = store.get_profile(chat_id, user_id)
+    awaiting_topic_in_group = (
+        not is_private
+        and store.is_recently_active(chat_id, user_id, ttl_seconds=600)
+        and not saved_profile.get("last_spread")
+    )
 
     if mentions_other_bot and not has_wake_word and not is_reply_to_this_bot:
         return
@@ -312,7 +317,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     if is_private:
         should_respond = True
     else:
-        should_respond = has_wake_word or is_reply_to_this_bot
+        should_respond = has_wake_word or is_reply_to_this_bot or awaiting_topic_in_group
 
     if not should_respond:
         return
@@ -368,67 +373,78 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
     )
     ack_msg = await message.reply(markdown_to_telegram_html(ack_text), parse_mode=ParseMode.HTML)
 
-    if draw_new:
-        spread = await asyncio.to_thread(
-            draw_tarot_spread,
-            spread_type=spread_type,
-            question=user_q,
-            subject_name=subject_name,
-            allow_reversed=True,
-            custom_cards_query=custom_cards,
-        )
-        store.update_profile(chat_id, user_id, {"last_spread": spread})
-
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-        img_filename = f"spread_{chat_id}_{int(time.time())}.png"
-        img_path = SPREADS_DIR / img_filename
-        await asyncio.to_thread(render_spread_image, spread, img_path)
-
-        cards_brief = " • ".join(
-            f"{c['position_index']}. {c['name_ru']} ({'⟲' if c['is_reversed'] else '↑'})"
-            for c in spread["cards"][:5]
-        )
-        bot_card = spread["bottom_of_deck"]
-        q_card = spread["quintessence"]["card"]
-
-        photo_caption = (
-            f"🃏 **{spread['spread_title']}**\n"
-            f"🎯 *Запрос:* {subject_name}\n"
-            f"🎴 *Выпавшие карты:* {cards_brief}\n"
-            f"🌊 *Дно колоды (скрытый мотив):* **[{bot_card['roman']}] {bot_card['name_ru']}** ({bot_card['orientation_ru']})\n"
-            f"✨ *Квинтэссенция (Совет):* **[{q_card['roman']}] {q_card['name_ru']}**"
-        )
-        await message.reply_photo(
-            photo=FSInputFile(img_path),
-            caption=markdown_to_telegram_html(photo_caption)[:1000],
-            parse_mode=ParseMode.HTML,
-        )
-    else:
-        spread = updated_profile["last_spread"]
-
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    search_query = " ".join(c["name_ru"] for c in spread["cards"]) + " " + user_q
-    rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 5)
-
-    reading = await generate_tarot_interpretation(
-        spread=spread,
-        user_question=user_q,
-        rag_passages=rag_passages,
-        history_messages=history,
-        is_followup=(not draw_new),
-    )
-    store.add_message(chat_id, user_id, "assistant", reading)
-
     try:
-        await ack_msg.delete()
-    except Exception:
-        pass
+        if draw_new:
+            spread = await asyncio.to_thread(
+                draw_tarot_spread,
+                spread_type=spread_type,
+                question=user_q,
+                subject_name=subject_name,
+                allow_reversed=True,
+                custom_cards_query=custom_cards,
+            )
+            store.update_profile(chat_id, user_id, {"last_spread": spread})
 
-    for part in split_html_telegram_message(reading):
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
+                img_filename = f"spread_{chat_id}_{int(time.time())}.png"
+                img_path = SPREADS_DIR / img_filename
+                await asyncio.to_thread(render_spread_image, spread, img_path)
+
+                cards_brief = " • ".join(
+                    f"{c['position_index']}. {c['name_ru']} ({'⟲' if c['is_reversed'] else '↑'})"
+                    for c in spread["cards"][:5]
+                )
+                bot_card = spread["bottom_of_deck"]
+                q_card = spread["quintessence"]["card"]
+
+                photo_caption = (
+                    f"🃏 **{spread['spread_title']}**\n"
+                    f"🎯 *Запрос:* {subject_name}\n"
+                    f"🎴 *Выпавшие карты:* {cards_brief}\n"
+                    f"🌊 *Дно колоды (скрытый мотив):* **[{bot_card['roman']}] {bot_card['name_ru']}** ({bot_card['orientation_ru']})\n"
+                    f"✨ *Квинтэссенция (Совет):* **[{q_card['roman']}] {q_card['name_ru']}**"
+                )
+                await message.reply_photo(
+                    photo=FSInputFile(img_path),
+                    caption=markdown_to_telegram_html(photo_caption)[:1000],
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as photo_err:
+                logger.error("Spread photo send error: %s", photo_err)
+        else:
+            spread = updated_profile["last_spread"]
+
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        search_query = " ".join(c["name_ru"] for c in spread["cards"]) + " " + user_q
+        rag_passages = await asyncio.to_thread(knowledge_base.search, search_query, 5)
+
+        reading = await generate_tarot_interpretation(
+            spread=spread,
+            user_question=user_q,
+            rag_passages=rag_passages,
+            history_messages=history,
+            is_followup=(not draw_new),
+        )
+        store.add_message(chat_id, user_id, "assistant", reading)
+
         try:
-            await message.reply(part, parse_mode=ParseMode.HTML)
+            await ack_msg.delete()
         except Exception:
-            await message.reply(strip_html_tags(part))
+            pass
+
+        for part in split_html_telegram_message(reading):
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception:
+                await message.reply(strip_html_tags(part))
+    except Exception as exc:
+        logger.exception("Error while processing Tarot spread: %s", exc)
+        err_text = "🃏 Карты чуть заискрили в колоде — повтори свой вопрос ещё раз, дорогая!"
+        try:
+            await ack_msg.edit_text(markdown_to_telegram_html(err_text), parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply(err_text)
 
 
 async def health_handler(request: web.Request) -> web.Response:
