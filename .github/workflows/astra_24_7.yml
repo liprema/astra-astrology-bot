@@ -19,6 +19,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Restore persistent SQLite memory from bot-memory branch
+        run: |
+          mkdir -p data arcana_bot/data matrix_bot/data
+          if git fetch origin bot-memory 2>/dev/null; then
+            git checkout origin/bot-memory -- data/dialog_memory.db arcana_bot/data/arcana_memory.db matrix_bot/data/matrix_memory.db 2>/dev/null || true
+            echo "Restored persistent SQLite databases from bot-memory branch."
+          else
+            echo "No bot-memory branch yet; starting fresh."
+          fi
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -39,19 +51,68 @@ jobs:
           TAROT_BOT_TOKEN: ${{ secrets.TAROT_BOT_TOKEN }}
           MATRIX_BOT_TOKEN: ${{ secrets.MATRIX_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          sync_memory() {
+            TMP_SYNC="/tmp/bot_memory_sync"
+            rm -rf "$TMP_SYNC"
+            mkdir -p "$TMP_SYNC/data" "$TMP_SYNC/arcana_bot/data" "$TMP_SYNC/matrix_bot/data"
+            cp -f data/dialog_memory.db "$TMP_SYNC/data/" 2>/dev/null || true
+            cp -f arcana_bot/data/arcana_memory.db "$TMP_SYNC/arcana_bot/data/" 2>/dev/null || true
+            cp -f matrix_bot/data/matrix_memory.db "$TMP_SYNC/matrix_bot/data/" 2>/dev/null || true
+            (
+              cd "$TMP_SYNC"
+              git init -q
+              git config user.name "astra-memory-bot"
+              git config user.email "astra-memory@users.noreply.github.com"
+              git add -f .
+              if ! git diff --cached --quiet; then
+                git commit -q -m "Sync persistent bot memory"
+                git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/bot-memory 2>/dev/null || true
+              fi
+            )
+          }
+
           PORT=7860 python -m bot.main &
           ASTRA_PID=$!
           (cd arcana_bot && PORT=7861 python -m bot.main) &
           ARCANA_PID=$!
           (cd matrix_bot && PORT=7862 python -m bot.main) &
           MATRIX_PID=$!
-          sleep 20400 || true
-          kill $ASTRA_PID $ARCANA_PID $MATRIX_PID 2>/dev/null || true
 
-      - name: Trigger seamless continuation run
+          # Periodically sync SQLite memory every 3 minutes
+          (
+            while true; do
+              sleep 180
+              sync_memory || true
+            done
+          ) &
+          SYNC_PID=$!
+
+          sleep 20400 || true
+          kill $SYNC_PID $ASTRA_PID $ARCANA_PID $MATRIX_PID 2>/dev/null || true
+          sync_memory || true
+
+      - name: Final memory backup & trigger seamless continuation run
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          TMP_SYNC="/tmp/bot_memory_sync_final"
+          rm -rf "$TMP_SYNC"
+          mkdir -p "$TMP_SYNC/data" "$TMP_SYNC/arcana_bot/data" "$TMP_SYNC/matrix_bot/data"
+          cp -f data/dialog_memory.db "$TMP_SYNC/data/" 2>/dev/null || true
+          cp -f arcana_bot/data/arcana_memory.db "$TMP_SYNC/arcana_bot/data/" 2>/dev/null || true
+          cp -f matrix_bot/data/matrix_memory.db "$TMP_SYNC/matrix_bot/data/" 2>/dev/null || true
+          (
+            cd "$TMP_SYNC"
+            git init -q
+            git config user.name "astra-memory-bot"
+            git config user.email "astra-memory@users.noreply.github.com"
+            git add -f .
+            if ! git diff --cached --quiet; then
+              git commit -q -m "Final sync persistent bot memory"
+              git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/bot-memory 2>/dev/null || true
+            fi
+          ) || true
           gh workflow run "Astra 24-7 Cloud Bot" --ref main || true

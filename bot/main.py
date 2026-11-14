@@ -29,7 +29,7 @@ from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
-from bot.astro_engine import calculate_full_chart, resolve_place
+from bot.astro_engine import calculate_full_chart, format_chart_for_llm, resolve_place
 from bot.chart_renderer import render_chart_image
 from bot.config import (
     BOOKS_DIR,
@@ -360,11 +360,17 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     store.mark_active(chat_id, user_id)
-    store.add_message(chat_id, user_id, "user", text)
+    reply_ctx = ""
+    if message.reply_to_message:
+        r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if r_txt:
+            reply_ctx = f"[В ответ на сообщение: «{r_txt[:350]}»]\n"
+    user_name_lbl = (message.from_user.first_name if message.from_user and message.from_user.first_name else "").strip()
+    store.add_message(chat_id, user_id, "user", f"{reply_ctx}{text}")
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    history = store.get_history(chat_id, user_id, limit=26)
+    history = store.get_history(chat_id, user_id, limit=30)
 
     analysis = await analyze_dialog_completeness(history, saved_profile=saved_profile)
 
@@ -372,7 +378,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         chat_id,
         user_id,
         {
-            "subject_name": analysis.get("subject_name"),
+            "subject_name": analysis.get("subject_name") or user_name_lbl or saved_profile.get("subject_name"),
             "chart_type": analysis.get("chart_type"),
             "date_str": analysis.get("date_str"),
             "time_str": analysis.get("time_str"),
@@ -384,7 +390,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
         chat_reply = await generate_astra_chat_response(
-            user_message=text,
+            user_message=f"{reply_ctx}{text}",
             history_messages=history,
             saved_profile=updated_profile,
             missing_info_hint=analysis.get("missing_info_question_ru") or "",
@@ -448,6 +454,14 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             place_label=place_query,
             subject_name=subject_name,
             chart_type=chart_type,
+        )
+        store.update_profile(
+            chat_id,
+            user_id,
+            {
+                "has_rendered_chart": True,
+                "chart_summary": format_chart_for_llm(chart),
+            },
         )
 
         if send_photo:

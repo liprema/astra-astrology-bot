@@ -43,7 +43,7 @@ from bot.llm_numerology import (
     generate_numerology_interpretation,
 )
 from bot.matrix_renderer import render_numerology_image
-from bot.numerology_engine import ARCANA_22_NAMES, calculate_full_numerology
+from bot.numerology_engine import ARCANA_22_NAMES, calculate_full_numerology, format_numerology_for_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("matrix_bot")
@@ -329,11 +329,17 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     store.mark_active(chat_id, user_id)
-    store.add_message(chat_id, user_id, "user", text)
+    reply_ctx = ""
+    if message.reply_to_message:
+        r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if r_txt:
+            reply_ctx = f"[В ответ на сообщение: «{r_txt[:350]}»]\n"
+    user_name_lbl = (message.from_user.first_name if message.from_user and message.from_user.first_name else "").strip()
+    store.add_message(chat_id, user_id, "user", f"{reply_ctx}{text}")
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    history = store.get_history(chat_id, user_id, limit=26)
+    history = store.get_history(chat_id, user_id, limit=30)
 
     analysis = await analyze_matrix_dialog_completeness(history, saved_profile=saved_profile)
 
@@ -342,7 +348,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         user_id,
         {
             "subject_label": analysis.get("subject_label"),
-            "full_name": analysis.get("full_name"),
+            "full_name": analysis.get("full_name") or user_name_lbl or saved_profile.get("full_name"),
             "date_str": analysis.get("date_str"),
             "partner_date_str": analysis.get("partner_date_str"),
         },
@@ -352,7 +358,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
         chat_reply = await generate_matrix_chat_response(
-            user_message=text,
+            user_message=f"{reply_ctx}{text}",
             history_messages=history,
             saved_profile=updated_profile,
             missing_info_hint=analysis.get("missing_info_question_ru") or "",
@@ -404,6 +410,14 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
             full_name=full_name,
             subject_label=subject_label,
             partner_date=partner_tuple,
+        )
+        store.update_profile(
+            chat_id,
+            user_id,
+            {
+                "has_rendered_matrix": True,
+                "matrix_summary": format_numerology_for_llm(num_data),
+            },
         )
 
         if send_photo:

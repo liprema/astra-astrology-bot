@@ -393,9 +393,12 @@ def calculate_full_numerology(
     # 5. Name Numerology (Pythagorean vs Chaldean)
     name_data = compute_name_numbers(full_name)
 
-    # 6. Predictive Cycles (Personal Year, Month, Day, 4 Pinnacles & 4 Challenges)
+    # 6. Predictive Cycles (Personal Year 2026 & upcoming 2027, Month, Day, 4 Pinnacles & 4 Challenges)
     now = datetime.date.today()
-    py_base, py_m, _ = reduce_to_single_or_master(d_red + m_red + reduce_to_single_or_master(now.year)[0])
+    cur_year = max(2026, now.year)
+    next_year = cur_year + 1
+    py_base, py_m, _ = reduce_to_single_or_master(d_red + m_red + reduce_to_single_or_master(cur_year)[0])
+    py_next_base, py_next_m, _ = reduce_to_single_or_master(d_red + m_red + reduce_to_single_or_master(next_year)[0])
     pm_base, _, _ = reduce_to_single_or_master(py_base + reduce_to_single_or_master(now.month)[0])
     pd_base, _, _ = reduce_to_single_or_master(pm_base + reduce_to_single_or_master(now.day)[0])
 
@@ -453,8 +456,10 @@ def calculate_full_numerology(
         "destiny_matrix_22": destiny_22,
         "name_numerology": name_data,
         "forecast": {
-            "current_year": now.year,
+            "current_year": cur_year,
+            "next_year": next_year,
             "personal_year": f"{py_m}/{py_base}" if py_m else str(py_base),
+            "personal_year_next": f"{py_next_m}/{py_next_base}" if py_next_m else str(py_next_base),
             "personal_month": pm_base,
             "personal_day": pd_base,
             "pinnacles": [
@@ -522,8 +527,10 @@ def format_numerology_for_llm(data: Dict) -> str:
         f"• Число Души (Муланк / Джива): {v['soul_number']} — Планета-управитель: {v['soul_planet']} ({v['soul_traits']})",
         f"• Число Дхармы/Судьбы (Бхагьянк): {v['destiny_number']} — Планета-управитель: {v['destiny_planet']} ({v['destiny_traits']})",
         "",
-        "--- 5. ПРОГНОСТИКА (ПИКИ ЖИЗНИ, ВЫЗОВЫ И ПЕРСОНАЛЬНЫЙ ГОД) ---",
-        f"• Персональный Год ({fc['current_year']}): {fc['personal_year']} | Персональный Месяц: {fc['personal_month']} | Персональный День: {fc['personal_day']}",
+        "--- 5. ПРОГНОСТИКА НА КОНЕЦ 2026 И НАСТУПАЮЩИЙ 2027 ГОД (ПИКИ ЖИЗНИ, ВЫЗОВЫ И ПЕРСОНАЛЬНЫЙ ГОД) ---",
+        f"• Текущий год: {fc['current_year']} (конец {fc['current_year']} года, скоро наступает {fc.get('next_year', 2027)} год)",
+        f"• Персональный Год на уходящий {fc['current_year']} г.: {fc['personal_year']} | Персональный Год на наступающий {fc.get('next_year', 2027)} г.: {fc.get('personal_year_next', '')}",
+        f"• Персональный Месяц сейчас: {fc['personal_month']} | Персональный День: {fc['personal_day']}",
         "• 4 Жизненных Пика: " + ", ".join(f"{lbl}: число {val}" for lbl, val in fc["pinnacles"]),
         f"• 4 Кармических Вызова: {fc['challenges']}",
     ])

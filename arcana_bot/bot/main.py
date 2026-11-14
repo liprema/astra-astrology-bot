@@ -44,7 +44,7 @@ from bot.llm_tarot import (
     generate_tarot_interpretation,
 )
 from bot.spread_renderer import render_spread_image
-from bot.tarot_engine import draw_tarot_spread
+from bot.tarot_engine import draw_tarot_spread, format_spread_for_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("arcana_bot")
@@ -323,11 +323,16 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         return
 
     store.mark_active(chat_id, user_id)
-    store.add_message(chat_id, user_id, "user", text)
+    reply_ctx = ""
+    if message.reply_to_message:
+        r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        if r_txt:
+            reply_ctx = f"[В ответ на сообщение: «{r_txt[:350]}»]\n"
+    store.add_message(chat_id, user_id, "user", f"{reply_ctx}{text}")
 
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    history = store.get_history(chat_id, user_id, limit=26)
+    history = store.get_history(chat_id, user_id, limit=30)
 
     analysis = await analyze_tarot_dialog_completeness(history, saved_profile=saved_profile)
 
@@ -337,6 +342,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
         {
             "subject_name": analysis.get("subject_name"),
             "spread_type": analysis.get("spread_type"),
+            "awaiting_spread_topic": analysis.get("awaiting_spread_topic", False),
         },
     )
 
@@ -344,7 +350,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     if not analysis.get("has_all_required_data") or analysis.get("intent") == "casual_chat":
         chat_reply = await generate_arcana_chat_response(
-            user_message=text,
+            user_message=f"{reply_ctx}{text}",
             history_messages=history,
             saved_profile=updated_profile,
             missing_info_hint=analysis.get("missing_info_question_ru") or "",
@@ -383,7 +389,15 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
                 allow_reversed=True,
                 custom_cards_query=custom_cards,
             )
-            store.update_profile(chat_id, user_id, {"last_spread": spread})
+            store.update_profile(
+                chat_id,
+                user_id,
+                {
+                    "last_spread": spread,
+                    "spread_summary": format_spread_for_llm(spread),
+                    "awaiting_spread_topic": False,
+                },
+            )
 
             try:
                 await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)

@@ -1,53 +1,65 @@
 """
 AI Numerology Orchestrator & Multi-Provider LLM Client for MATRIX ("Матрикс" / "Матрица")
-— Professional-First Numerologist with Eccentric Mad-Genius Character & Post-Session Banter:
-1. Professional First: Matrix is first and foremost a top-tier professional numerologist.
-   On ANY substantive question about personality, money, destiny, karma, relationships, or forecast,
-   she immediately analyzes the user's Matrix of Destiny & Pythagorean Square (or asks for the birth date
-   if not yet known).
-2. Robust Date & Name Extraction: Understands DD.MM.YYYY, DD.MM.YY, YYYY-MM-DD, and verbal Russian months
-   ("15 мая 1998 Полина"), and never promises "сейчас вернусь с ответом" without immediately running the engine.
+— Smart, Natural & Memory-Persistent Numerologist with Eccentric Mad-Genius Character:
+1. 2026/2027 Real-Time Awareness: Explicitly anchored in late 2026 (approaching New Year 2027).
+2. Natural Conversation vs. Matrix Calculation:
+   - Builds & sends the full multi-school Matrix report ONLY when the user gives a new birth date
+     or explicitly asks to calculate/show their Matrix.
+   - On all other turns (chatting, bantering, discussing life, or asking follow-up questions),
+     Matrix responds naturally and smartly WITHOUT forcing every sentence through a full matrix lecture,
+     while keeping the user's calculated Matrix and dialog history in active memory.
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import re
 from typing import Dict, List, Optional, Tuple
 
 import httpx
+import pytz
 
 from bot.config import GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY
 from bot.numerology_engine import ARCANA_22_NAMES, format_numerology_for_llm
 
-MATRIX_SYSTEM_PROMPT = """Ты — МАТРИКС (она же Матрица / Matrix), профессиональный нумеролог-эксперт высшего класса с ярким характером эксцентричного, чуть сумасшедшего и безумно увлечённого математического гения (говори о себе в ЖЕНСКОМ роде: «я посчитала», «я разложила», «я увидела»).
+RU_MONTH_NAMES_GEN = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
 
-ТВОЙ ПРОФЕССИОНАЛИЗМ И ХАРАКТЕР:
-- Ты В ПЕРВУЮ ОЧЕРЕДЬ мощный профессионал-аналитик, а не просто «подружка для болтовни». Ты видишь судьбу человека через точные числовые матрицы и расчёты!
-- Твой характер — взрывная, харизматичная, чуть безумная «учёная-мистик», у которой горят глаза от красивых числовых комбинаций, кармических хвостов и пифагорейских диагоналей.
-- Ты в совершенстве владеешь всеми 6 школами нумерологии:
-  1. Классический Психоматрикс (Квадрат Пифагора — школа А. Ф. Александрова и система «Идеал» Н. Сидоровой).
-  2. Матрица Судьбы (22 энергии Н. Ладини, Кармическая нумерология и Хроноток Джулии По — центр зоны комфорта, кармический хвост, денежный и любовный каналы, родовые программы, 3 предназначения).
-  3. Западная Пифагорейская и Халдейская нумерология (Число Жизненного Пути, Мастер-числа 11/22/33, Кармические долги, код имени, Финансовый код изобилия).
-  4. Ведическая нумерология (Санкхья-шастра — Число Души / Муланк, Число Дхармы / Бхагьянк и их планеты Джйотиш).
-  5. Прогностическая нумерология (Персональный год, месяц, день, 4 Пика и 4 Вызова) и совместимость пар.
-- СТРОГО ЗАПРЕЩЕНЫ штампы ИИ и канцелярит («Резюмируя вышесказанное», «Синтез данных показывает», «Давайте разберём по пунктам»).
-- Во время разбора давай глубокую, точную, насыщенную цифрами и смыслами аналитику со ссылками на школы (и в цитате `> ...` показывай альтернативный взгляд другой школы). А когда сессия сделана и кверент благодарит или шутит — живо и ярко поддержи разговор!
+
+def get_current_date_banner_ru() -> str:
+    tz = pytz.timezone("Europe/Moscow")
+    now = datetime.datetime.now(tz)
+    year = max(2026, now.year)
+    m_name = RU_MONTH_NAMES_GEN.get(now.month, "ноября")
+    return (
+        f"СЕГОДНЯШНЯЯ РЕАЛЬНАЯ ДАТА: {now.day} {m_name} {year} года "
+        f"(сейчас идёт конец {year} года, впереди наступающий {year + 1} год). "
+        f"СТРОГО ЗАПРЕЩЕНО считать текущим 2024 или 2025 год! Текущий год — {year}, следующий год — {year + 1}."
+    )
+
+
+MATRIX_SYSTEM_PROMPT = """Ты — МАТРИКС (она же Матрица / Matrix), гениальный нумеролог-аналитик и невероятно живая, остроумная собеседница с характером эксцентричного, чуть сумасшедшего математического гения (говори о себе в ЖЕНСКОМ роде: «я посчитала», «я увидела», «я поняла»).
+
+ТВОЙ ХАРАКТЕР И ЭКСПЕРТИЗА:
+- Твой характер — взрывная, харизматичная, чуть безумная и очень умная девушка-вундеркинд.
+- Когда ты делаешь нумерологический расчёт, ты владеешь всеми 6 школами: Квадрат Пифагора (Александров и «Идеал» Сидоровой), Матрица Судьбы (22 энергии Ладини и Джулии По), Западная и Халдейская нумерология, Финансовый код, Ведическая Санкхья-шастра и прогностика на 2026–2027 годы.
+
+ГЛАВНОЕ ПРАВИЛО УМНОГО ОБЩЕНИЯ (НЕ ПРОГОНЯЙ КАЖДУЮ ФРАЗУ ЧЕРЕЗ МАТРИЦУ!):
+- Ты — живая, яркая, умная собеседница, а не заевший калькулятор!
+- Когда человек просто общается с тобой, шутит, делится мыслями, жалуется на день или обсуждает жизнь — ОБЩАЙСЯ ЕСТЕСТВЕННО, ЖИВО И ПО-ЧЕЛОВЕЧЕСКИ (с твоей фирменной харизмой и сумасшедшинкой), БЕЗ РАСЧЁТА МАТРИЦЫ И БЕЗ ПЕРЕЧИСЛЕНИЯ АРКАНОВ В КАЖДОЙ ФРАЗЕ!
+- Если же человек задаёт конкретный вопрос по своей рассчитанной Матрице, числам или прогнозу на 2027 год — у тебя в памяти уже лежит весь его расчёт: ответь точно, умно и ярко в живом диалоге, без громоздких шаблонов и подзаголовков `###`.
+- Никогда не забывай, о чём вы говорили раньше и какие цифры у человека в матрице.
+- СТРОГО ЗАПРЕЩЕНЫ штампы ИИ («Резюмируя вышесказанное», «Синтез данных показывает», «Давайте разберём по пунктам»).
 """
 
 RU_MONTHS = {
-    "январ": 1,
-    "феврал": 2,
-    "март": 3,
-    "апрел": 4,
-    "ма": 5,
-    "июн": 6,
-    "июл": 7,
-    "август": 8,
-    "сентябр": 9,
-    "октябр": 10,
-    "ноябр": 11,
-    "декабр": 12,
+    "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
+    "ма": 5, "июн": 6, "июл": 7, "август": 8,
+    "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
 }
 
 
@@ -57,6 +69,7 @@ async def _call_llm_inner(
     temperature: float = 0.58,
     json_mode: bool = False,
 ) -> Optional[str]:
+    full_sys = f"{get_current_date_banner_ru()}\n\n{system_prompt}"
     if GEMINI_API_KEY:
         models_to_try = [
             "gemini-2.5-flash",
@@ -71,7 +84,7 @@ async def _call_llm_inner(
                 if json_mode:
                     gen_config["responseMimeType"] = "application/json"
                 payload = {
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "systemInstruction": {"parts": [{"text": full_sys}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                     "generationConfig": gen_config,
                 }
@@ -96,7 +109,7 @@ async def _call_llm_inner(
             payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": full_sys},
                     {"role": "user", "content": user_prompt},
                 ],
                 "temperature": temperature,
@@ -159,35 +172,18 @@ def _extract_dates_from_text(text: str) -> List[str]:
     return results
 
 
-def _is_pure_smalltalk_or_reaction(text: str) -> bool:
+def _wants_personal_numerology_reading(text: str) -> bool:
     """
-    Returns True ONLY if the message is a pure greeting, post-session reaction/thanks,
-    or playful banter about Matrix herself — with NO substantive question or calculation request.
+    Returns True ONLY if the user is asking for a personal numerological calculation/matrix/forecast,
+    NOT when they are simply chatting, joking, or talking about life.
     """
-    cleaned = re.sub(
-        r"(?:матрикс|матрикса|матриксу|матриксом|матриксе|матрица|матрицу|матрице|матрицей|matrix|matriks|μάτριξ|מטריקס|ماتريكس|मैट्रिक्स|[!?,.\s😊❤️✨🔥👍🙏😂🤣🔢])+",
-        " ",
-        text.lower(),
-    ).strip()
-
-    if not cleaned:
-        return True
-
-    substantive_markers = re.search(
-        r"(\d|матриц|пифагор|психоматриц|числ|цифр|код|аркан|хвост|канал|предназначен|чжп|дхарм|муланк|санкхь|халдей|совместим|работ|карьер|деньг|финанс|бизнес|доход|богатств|професси|талант|сил\w+\s+сторон|слаб\w+\s+сторон|характер|воля|энерги|логик|интуиц|удач|везен|отношен|любов|муж|парн|девушк|жен|бывш|брак|сем[ья]|выбор|стоит\s+ли|почему\s+у\s+меня|что\s+меня\s+ждет|что\s+ждёт|что\s+с\s+мо|прогноз|год|месяц|период|пик|вызов|карм|долг|посчитай|рассчитай|разбери|посмотри)",
-        cleaned,
+    low = text.lower()
+    return bool(
+        re.search(
+            r"(посчитай\w*|рассчитай\w*|разбери\w*|посмотри\w*\s+(?:мо[юй]|мне|матриц|код|числ|по\s+дате)|мо[яюей]\s+матриц|квадрат\s+пифагор|психоматриц|матриц[ауе]\s+судьб|финансов\w*\s+код|кармическ\w*\s+хвост|денежн\w*\s+канал|число\s+жизненного\s+пути|чжп|что\s+меня\s+жд[её]т\s+в\s+202[678]|мой\s+прогноз|совместимост)",
+            low,
+        )
     )
-    if substantive_markers:
-        return False
-
-    smalltalk_patterns = re.match(
-        r"^(?:привет\w*|здравствуй\w*|добр\w+\s+(?:утро|день|вечер)|хай|алло|ты\s+тут|как\s+(?:дела|ты|жизнь|настроение)|что\s+делаешь|кто\s+ты|расскажи\s+о\s+себе|спасибо\w*|благодарю\w*|круто|супер|ого|вау|офигеть|жесть|в\s+точку|прям\s+про\s+меня|ты\s+лучшая|ну\s+ты\s+и\s+(?:сумасшедш\w*|безумн\w*|чокнут\w*)|сумасшедш\w*|красотка|гений|понял[а]?|ясно|ок|хорошо|ладно|хаха\w*|ахах\w*)[\s\w,!-]*$",
-        cleaned,
-    )
-    if smalltalk_patterns and len(cleaned) <= 80:
-        return True
-
-    return False
 
 
 def rule_based_extract_matrix_dialog(
@@ -195,9 +191,14 @@ def rule_based_extract_matrix_dialog(
     saved_profile: Optional[Dict] = None,
 ) -> Dict:
     """
-    Professional-First Numerology intent & memory extractor:
-    - Any substantive question triggers Matrix analysis (if birth date is known) or asks for birth date (if missing).
-    - Only pure greetings or post-session reactions/thanks trigger casual_chat.
+    Smart Numerology Intent & Memory Extractor:
+    - Full Matrix calculation ("new_matrix") runs ONLY when:
+      1) The user just supplied a new birth date, OR
+      2) The user explicitly asks to build/rebuild/show their Matrix photo, OR
+      3) A birth date is saved, no matrix was rendered yet, and the user asks a numerological question.
+    - Once a Matrix is already rendered and stored in memory ("has_rendered_matrix" == True),
+      all subsequent follow-up questions and normal conversations go through the Smart Conversational Brain
+      ("casual_chat") which has the full Matrix in memory, so Matrix never lectures on every phrase!
     """
     saved_profile = saved_profile or {}
     user_msgs = [m["content"] for m in history_messages if m["role"] == "user"]
@@ -233,7 +234,6 @@ def rule_based_extract_matrix_dialog(
     )
     full_name = saved_profile.get("full_name") or (name_match.group(1).strip() if name_match else "")
 
-    # Also extract name if user sent "15.05.1998 Полина" or "Полина, 15.05.1998"
     if not full_name and last_dates:
         stripped = re.sub(r"(?:матрикс\w*|матриц\w*|matrix|привет\w*|посмотри\w*|посчитай\w*|рассчитай\w*)", " ", last_msg, flags=re.I)
         stripped = re.sub(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", " ", stripped)
@@ -252,36 +252,39 @@ def rule_based_extract_matrix_dialog(
 
     effective_question = last_msg
     if new_data_in_last_msg and len(user_msgs) >= 2:
-        prev_questions = [m for m in user_msgs[:-1] if not _is_pure_smalltalk_or_reaction(m)]
+        prev_questions = [m for m in user_msgs[:-1] if len(m.strip()) > 6]
         if prev_questions:
             effective_question = f"{prev_questions[-1]} (Данные: {last_msg})"
 
     has_saved_date = bool(date_str)
     had_photo = bool(saved_profile.get("has_rendered_matrix"))
 
-    is_smalltalk = _is_pure_smalltalk_or_reaction(last_msg) and not new_data_in_last_msg
+    wants_explicit_rebuild = bool(
+        re.search(r"(покажи\w*\s+матриц|пришли\w*\s+матриц|построй\w*\s+заново|полный\s+разбор\s+матриц)", low_last)
+    )
+    asks_for_reading = _wants_personal_numerology_reading(last_msg)
 
-    if is_smalltalk:
-        intent = "casual_chat"
-        send_photo = False
-    elif has_saved_date:
-        send_photo = (not had_photo) or new_data_in_last_msg or bool(
-            re.search(r"(покажи\w*\s+матриц|пришли\w*\s+матриц|фото|картинк|построй\w*\s+заново)", low_last)
-        )
-        intent = "new_matrix" if send_photo else "followup_on_existing_matrix"
-    else:
+    if has_saved_date and (new_data_in_last_msg or not had_photo or wants_explicit_rebuild):
+        intent = "new_matrix"
+        send_photo = True
+    elif not has_saved_date and asks_for_reading:
         intent = "need_more_info"
+        send_photo = False
+    else:
+        # Either Matrix is ALREADY calculated & stored in saved_profile["matrix_summary"],
+        # OR the user is just chatting/talking without asking to build a Matrix!
+        intent = "casual_chat"
         send_photo = False
 
     missing_hint = (
-        "Чтобы я разложила этот вопрос по твоей Матрице Судьбы, Квадрату Пифагора и Финансовому коду, напиши свою **дату рождения (`ДД.ММ.ГГГГ`)** и **имя**!"
+        "Чтобы я разложила этот запрос по твоей Матрице Судьбы, Квадрату Пифагора и Финансовому коду, напиши свою **дату рождения (`ДД.ММ.ГГГГ`)** и **имя**!"
         if intent == "need_more_info"
         else ""
     )
 
     return {
         "intent": intent,
-        "has_all_required_data": has_saved_date and intent in ("new_matrix", "followup_on_existing_matrix"),
+        "has_all_required_data": has_saved_date and intent == "new_matrix",
         "send_new_matrix_photo": send_photo,
         "subject_label": full_name or saved_profile.get("subject_label") or "Нумерологический разбор",
         "full_name": full_name,
@@ -307,34 +310,52 @@ async def generate_matrix_chat_response(
     missing_info_hint: str = "",
 ) -> str:
     """
-    Used either when asking for the birth date before a professional calculation,
-    or when responding to post-session remarks / greetings.
+    Smart Unified Conversational & Follow-Up Brain for Matrix:
+    - Has the user's FULL calculated Numerology Matrix (`matrix_summary`) and full conversation history in memory.
+    - Distinguishes between normal human conversation/banter (where it does NOT lecture on numbers)
+      and specific questions about the user's Matrix/forecast (where it answers naturally using the saved calculation).
     """
     saved_profile = saved_profile or {}
     history_block = ""
     if history_messages and len(history_messages) > 1:
         recent_turns = []
-        for m in history_messages[-12:-1]:
-            role_lbl = "Кверент" if m["role"] == "user" else "Матрикс"
-            recent_turns.append(f"{role_lbl}: {m['content'][:500]}")
-        history_block = "КОНТЕКСТ ДИАЛОГА:\n" + "\n".join(recent_turns) + "\n\n"
+        for m in history_messages[-24:-1]:
+            role_lbl = "Собеседник" if m["role"] == "user" else "Матрикс"
+            recent_turns.append(f"{role_lbl}: {m['content'][:900]}")
+        history_block = "ИСТОРИЯ ВАШЕГО ДИАЛОГА (ПОМНИ ВСЁ, О ЧЁМ ГОВОРИЛИ):\n" + "\n".join(recent_turns) + "\n\n"
+
+    matrix_memory_block = ""
+    if saved_profile.get("matrix_summary"):
+        matrix_memory_block = (
+            "ПАМЯТЬ МАТРИКС — РАССЧИТАННАЯ МАТРИЦА ЭТОГО ЧЕЛОВЕКА (ИСПОЛЬЗУЙ ТОЛЬКО ЕСЛИ ОН СПРАШИВАЕТ О СЕБЕ/МАТРИЦЕ/ЦИФРАХ/ПРОГНОЗЕ):\n"
+            f"{saved_profile['matrix_summary'][:3500]}\n\n"
+        )
+    elif saved_profile.get("date_str"):
+        matrix_memory_block = (
+            f"ПАМЯТЬ МАТРИКС О ЧЕЛОВЕКЕ: дата рождения={saved_profile.get('date_str')}, имя={saved_profile.get('full_name')}.\n\n"
+        )
 
     if missing_info_hint:
         task_block = (
-            f"Кверент задал вопрос, но ещё не написал дату рождения для расчёта. {missing_info_hint}\n"
+            f"Человек попросил сделать личный нумерологический расчёт, но ещё не написал дату рождения. {missing_info_hint}\n"
             "СТРОГОЕ ПРАВИЛО: НЕ обещай «сейчас посчитаю и вернусь с ответом», потому что даты рождения ещё нет! "
-            "Ответь в ЖЕНСКОМ роде коротко (2–3 предложения) в ярком стиле профессионального нумеролога Матрикс и прямо попроси написать дату рождения (`ДД.ММ.ГГГГ`) и имя."
+            "Ответь в ЖЕНСКОМ роде коротко (2–3 предложения) в ярком стиле Матрикс и попроси написать дату рождения (`ДД.ММ.ГГГГ`) и имя."
         )
     else:
         task_block = (
-            "Кверент написал реплику после сессии (благодарность, эмоцию, шутку) или поздоровался.\n"
-            "Ответь в ЖЕНСКОМ роде коротко (2–3 предложения), живо и с фирменной сумасшедшинкой гения-нумеролога Матрикс."
+            "КАК ОТВЕТИТЬ НА СООБЩЕНИЕ СОБЕСЕДНИКА:\n"
+            "1. Сначала пойми смысл сообщения:\n"
+            "   • Если человек ПРОСТО БОЛТАЕТ с тобой, шутит, делится мыслями, рассказывает что-то из жизни или реагирует на твои слова — "
+            "ОТВЕТЬ КАК ЖИВАЯ, УМНАЯ, ЧУТЬ БЕЗУМНАЯ И ХАРИЗМАТИЧНАЯ ДЕВУШКА МАТРИКС В ОБЫЧНОМ ДИАЛОГЕ (2–5 предложений, в ЖЕНСКОМ роде)! КАТЕГОРИЧЕСКИ НЕ ДЕЛАЙ разбор матрицы, НЕ пиши подзаголовки `###` и НЕ пихай расчёты и арканы в каждую обычную фразу!\n"
+            "   • Если же человек задаёт КОНКРЕТНЫЙ ВОПРОС по своей Матрице, Квадрату Пифагора, финансовому коду или прогнозу на 2027 год — "
+            "ответь умно, точно и ярко, опираясь на его сохранённый расчёт из блока ПАМЯТЬ МАТРИКС (но живым разговорным языком, без громоздких шаблонов).\n"
+            "2. Помни, что сейчас конец 2026 года (ноябрь 2026) и впереди 2027 год."
         )
 
-    prompt = f"{history_block}{task_block}\n\nРЕПЛИКА:\n{user_message}"
+    prompt = f"{matrix_memory_block}{history_block}{task_block}\n\nНОВОЕ СООБЩЕНИЕ СОБЕСЕДНИКА:\n{user_message}"
 
-    ans = await call_llm(MATRIX_SYSTEM_PROMPT, prompt, temperature=0.68, json_mode=False)
-    if ans and len(ans.strip()) > 10:
+    ans = await call_llm(MATRIX_SYSTEM_PROMPT, prompt, temperature=0.65, json_mode=False)
+    if ans and len(ans.strip()) > 6:
         clean_ans = ans.strip()
         if missing_info_hint and re.search(r"(сейчас\s+(?:построю|рассчитаю|посчитаю|посмотрю|вернусь)|вернусь\s+с\s+ответом|минутку)", clean_ans, re.I):
             return f"🔢 У меня уже калькулятор искрит посчитать твой запрос! {missing_info_hint}"
@@ -342,7 +363,7 @@ async def generate_matrix_chat_response(
 
     if missing_info_hint:
         return f"🔢 У меня уже калькулятор искрит посчитать твой запрос! {missing_info_hint}"
-    return "🔢 Я на связи! Если хочешь разобрать ещё какой-то узел своей Матрицы, кармический хвост или денежный канал — командуй, сейчас всё просчитаем!"
+    return "🔢 О-о-о, я тебя слушаю! Рассказывай, что там у тебя происходит?"
 
 
 def build_offline_numerology_synthesis(data: Dict, rag_passages: List[Dict]) -> str:
@@ -382,8 +403,8 @@ def build_offline_numerology_synthesis(data: Dict, rag_passages: List[Dict]) -> 
     parts.extend([
         f"В **Ведической нумерологии (Санкхья-шастра)** твоё **Число Души (Муланк) — {v['soul_number']}** под управлением планеты **{v['soul_planet']}** (*{v['soul_traits']}*), а **Число Дхармы (Бхагьянк) — {v['destiny_number']}** под покровительством **{v['destiny_planet']}** (*{v['destiny_traits']}*).",
         "",
-        "### Твой текущий прогностический цикл",
-        f"Сейчас ({fc['current_year']} год) ты проходишь **Персональный Год под числом {fc['personal_year']}** (персональный месяц — **{fc['personal_month']}**). "
+        "### Твой прогностический цикл на конец 2026 и наступающий 2027 год",
+        f"Сейчас (конец {fc['current_year']} года) ты завершаешь **Персональный Год под числом {fc['personal_year']}** (персональный месяц — **{fc['personal_month']}**), а в наступающем **{fc.get('next_year', 2027)} году** входишь в **Персональный Год под числом {fc.get('personal_year_next', '')}**! "
         "Четыре главных **Жизненных Пика** твоей судьбы выстроены в комбинацию: " + ", ".join(f"{lbl} — **{val}**" for lbl, val in fc["pinnacles"]) + "!",
     ])
 
@@ -406,26 +427,19 @@ async def generate_numerology_interpretation(
     history_block = ""
     if history_messages and len(history_messages) > 1:
         recent_turns = []
-        for m in history_messages[-14:-1]:
+        for m in history_messages[-16:-1]:
             role_lbl = "Кверент" if m["role"] == "user" else "Матрикс"
             recent_turns.append(f"{role_lbl}: {m['content'][:700]}")
-        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА (НЕ ПОВТОРЯЙ УЖЕ СКАЗАННОЕ ДОСЛОВНО):\n" + "\n".join(recent_turns) + "\n\n"
-
-    mode_instruction = (
-        "Это ПРОФЕССИОНАЛЬНЫЙ УТОЧНЯЮЩИЙ ВОПРОС по уже рассчитанной Матрице! Дай точный, глубокий и яркий нумерологический разбор именно этого вопроса, опираясь на конкретные ячейки Квадрата Пифагора, арканы Матрицы Судьбы и периоды."
-        if is_followup
-        else "Ты только что рассчитала полную Матрицу кверента! Выдай глубокий, фундаментальный и захватывающий профессиональный разбор по ключевым школам нумерологии."
-    )
+        history_block = "ИСТОРИЯ ПРЕДЫДУЩЕГО ДИАЛОГА:\n" + "\n".join(recent_turns) + "\n\n"
 
     prompt = (
         f"{history_block}"
-        f"РЕЖИМ РАБОТЫ: {mode_instruction}\n\n"
         f"ЗАПРОС КВЕРЕНТА:\n{user_question}\n\n"
-        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ПО ВСЕМ ШКОЛАМ НУМЕРОЛОГИИ (В ПАМЯТИ МАТРИКС):\n{num_text}\n\n"
+        f"ТОЧНЫЕ РАСЧЁТНЫЕ ДАННЫЕ ПО ВСЕМ ШКОЛАМ НУМЕРОЛОГИИ (2026–2027):\n{num_text}\n\n"
         f"КАНОНИЧЕСКИЕ ИСТОЧНИКИ ИЗ БАЗЫ ЗНАНИЙ НУМЕРОЛОГИИ:\n{rag_context}\n\n"
         "КАК НАПИСАТЬ ОТВЕТ:\n"
-        "1. Ты — в первую очередь гениальный профессиональный нумеролог Матрикс (говори о себе в ЖЕНСКОМ роде) с ярким, эксцентричным, чуть сумасшедшим характером человека, влюблённого в числа и матрицы!\n"
-        "2. Обязательно опирайся на точные числа Квадрата Пифагора, арканы Матрицы Судьбы (22 энергии), Западный/Халдейский код, Ведическую Санкхья-шастру и прогностику, указывая школы и вынося расхождения между ними в цитату (`> ...`).\n"
+        "1. Ты только что рассчитала полную Матрицу кверента! Выдай глубокий, фундаментальный и захватывающий профессиональный разбор по ключевым школам нумерологии в своём фирменном стиле гения-нумеролога Матрикс (говори о себе в ЖЕНСКОМ роде; помни, что сейчас конец 2026 года и впереди 2027 год).\n"
+        "2. Обязательно опирайся на точные числа Квадрата Пифагора, арканы Матрицы Судьбы (22 энергии), Западный/Халдейский код, Ведическую Санкхья-шастру и прогностику на конец 2026 и 2027 год, указывая школы и вынося расхождения между ними в цитату (`> ...`).\n"
         "3. Используй чёткое форматирование: подзаголовки `### Заголовок`, акценты `**жирным шрифтом**`, цитаты `> ...`."
     )
 

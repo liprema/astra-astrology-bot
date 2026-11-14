@@ -511,8 +511,10 @@ def calculate_full_chart(
     lf_idx, lf_sign, lf_glyph, lf_deg, lf_min = format_deg(lot_fortune_lon)
     ls_idx, ls_sign, ls_glyph, ls_deg, ls_min = format_deg(lot_spirit_lon)
 
-    # Annual Profections & Firdaria (for current moment UTC)
+    # Annual Profections & Firdaria (for current moment UTC — late 2026 / upcoming 2027)
     now_utc = datetime.datetime.now(pytz.UTC)
+    if now_utc.year < 2026:
+        now_utc = now_utc.replace(year=2026)
     age_years_int = max(0, int((now_utc - dt_utc).days // 365.2425))
     profected_house_num = (age_years_int % 12) + 1
     asc_sign_idx = int(asc_lon // 30)
@@ -520,7 +522,36 @@ def calculate_full_chart(
     profected_sign_name = ZODIAC_SIGNS_RU[profected_sign_idx]
     profected_lord_trad = TRADITIONAL_RULERS[profected_sign_idx]
     profected_lord_mod = MODERN_RULERS[profected_sign_idx]
+
+    next_prof_house = ((age_years_int + 1) % 12) + 1
+    next_prof_sign_idx = (asc_sign_idx + next_prof_house - 1) % 12
+    next_prof_sign_name = ZODIAC_SIGNS_RU[next_prof_sign_idx]
+    next_prof_lord_trad = TRADITIONAL_RULERS[next_prof_sign_idx]
+    next_prof_lord_mod = MODERN_RULERS[next_prof_sign_idx]
+
     firdaria_info = compute_firdaria(is_day_chart, dt_utc, now_utc)
+
+    # Current real-time sky transits (for today in late 2026)
+    jd_now = swe.julday(
+        now_utc.year,
+        now_utc.month,
+        now_utc.day,
+        now_utc.hour + now_utc.minute / 60.0,
+    )
+    current_transits = []
+    for pid, ru_name, glyph, _ in PLANET_LIST[:11]:
+        try:
+            tr_res, _ = swe.calc_ut(jd_now, pid, swe.FLG_SWIEPH | swe.FLG_SPEED)
+            tr_lon = float(tr_res[0])
+            tr_spd = float(tr_res[3])
+            _, tr_sign, tr_sglyph, tr_d, tr_m = format_deg(tr_lon)
+            tr_house = house_of_longitude(tr_lon, primary_cusps)
+            r_mark = " R" if tr_spd < 0 else ""
+            current_transits.append(
+                f"{glyph} {ru_name}: {tr_d:02d}°{tr_m:02d}' {tr_sglyph} {tr_sign}{r_mark} (транзит по {tr_house}-му дому)"
+            )
+        except Exception:
+            pass
 
     # 4. Uranian / Hamburg School Transneptunians + Key Midpoints
     uranian_results = []
@@ -661,9 +692,16 @@ def calculate_full_chart(
                 "profected_sign": profected_sign_name,
                 "lord_of_year_trad": profected_lord_trad,
                 "lord_of_year_mod": profected_lord_mod,
+                "next_age": age_years_int + 1,
+                "next_profected_house": next_prof_house,
+                "next_profected_sign": next_prof_sign_name,
+                "next_lord_trad": next_prof_lord_trad,
+                "next_lord_mod": next_prof_lord_mod,
             },
             "firdaria": firdaria_info,
         },
+        "current_transits": current_transits,
+        "current_date_str": now_utc.strftime("%d.%m.%Y"),
         "uranian": {
             "sun_moon_midpoint": f"{sm_deg:02d}°{sm_min:02d}' {sm_glyph} {sm_sign}",
             "transneptunians": uranian_results,
@@ -680,10 +718,12 @@ def calculate_full_chart(
 
 def format_chart_for_llm(chart: Dict) -> str:
     """Format full multi-tradition chart data into structured text for LLM synthesis."""
+    cur_date_lbl = chart.get("current_date_str") or "ноябрь 2026"
     lines = [
         f"=== АСТРОНОМИЧЕСКИЙ РАСЧЁТ КАРТЫ ({chart['subject_name']}) ===",
+        f"АКТУАЛЬНАЯ ДАТА РАСЧЁТА ТРАНЗИТОВ И ПРОФЕКЦИЙ: {cur_date_lbl} (конец 2026 года, канун 2027 года)",
         f"Тип карты: {chart['chart_type']} | Основная система домов: {chart['house_system']}",
-        f"Дата и время (местное): {chart['dt_local_str']} | UTC: {chart['dt_utc_str']}",
+        f"Дата и время рождения (местное): {chart['dt_local_str']} | UTC: {chart['dt_utc_str']}",
         f"Координаты: {chart['place_label']} ({chart['lat']:.4f}N, {chart['lon']:.4f}E, часовой пояс {chart['tz_name']})",
         f"Асцендент (ASC): {chart['asc']['formatted']} (Упр. классич.: {chart['asc']['trad_ruler']}, соврем.: {chart['asc']['mod_ruler']})",
         f"Середина Неба (MC): {chart['mc']['formatted']}",
@@ -706,14 +746,21 @@ def format_chart_for_llm(chart: Dict) -> str:
         )
 
     hm = chart["hellenistic_medieval"]
+    ap = hm["annual_profection"]
     lines.extend([
-        "\n--- 3. ЭЛЛИНИСТИЧЕСКАЯ И СРЕДНЕВЕКОВАЯ АСТРОЛОГИЯ ---",
+        "\n--- 3. ЭЛЛИНИСТИЧЕСКАЯ И СРЕДНЕВЕКОВАЯ АСТРОЛОГИЯ + ПРОГНОСТИКА 2026–2027 ---",
         f"• Секта карты: {hm['sect']}",
         f"• Жребий Фортуны (Парс Фортуны): {hm['lot_of_fortune']['formatted']} (дом {hm['lot_of_fortune']['house']}, диспозитор {hm['lot_of_fortune']['trad_ruler']})",
         f"• Жребий Духа (Парс Духа): {hm['lot_of_spirit']['formatted']} (дом {hm['lot_of_spirit']['house']}, диспозитор {hm['lot_of_spirit']['trad_ruler']})",
-        f"• Годовая профекция (возраст {hm['annual_profection']['current_age']}): {hm['annual_profection']['profected_house']}-й дом ({hm['annual_profection']['profected_sign']}), Хронократор года: классич. {hm['annual_profection']['lord_of_year_trad']} / соврем. {hm['annual_profection']['lord_of_year_mod']}",
-        f"• Фирдар на текущий момент: Большой период — {hm['firdaria']['major_firdar']}, Подпериод — {hm['firdaria']['sub_firdar']}",
+        f"• Текущая годовая профекция (2026 г., возраст {ap['current_age']}): {ap['profected_house']}-й дом ({ap['profected_sign']}), Хронократор года: классич. {ap['lord_of_year_trad']} / соврем. {ap['lord_of_year_mod']}",
+        f"• Следующая годовая профекция (на 2027 г., возраст {ap.get('next_age', ap['current_age'] + 1)}): {ap.get('next_profected_house', '')}-й дом ({ap.get('next_profected_sign', '')}), Хронократор: классич. {ap.get('next_lord_trad', '')} / соврем. {ap.get('next_lord_mod', '')}",
+        f"• Фирдар на текущий момент (конец 2026 — 2027): Большой период — {hm['firdaria']['major_firdar']}, Подпериод — {hm['firdaria']['sub_firdar']}",
     ])
+
+    if chart.get("current_transits"):
+        lines.append("\n--- 3Б. РЕАЛЬНЫЕ ТРАНЗИТЫ НЕБА СЕЙЧАС (КОНЕЦ 2026 — НАЧАЛО 2027 ГОДА) ---")
+        for tr_line in chart["current_transits"]:
+            lines.append(f"• {tr_line}")
 
     fos = chart["formula_of_soul"]
     lines.extend([
