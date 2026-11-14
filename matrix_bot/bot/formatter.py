@@ -136,43 +136,53 @@ def strip_html_tags(html_text: str) -> str:
     return html.unescape(no_tags)
 
 
-def split_html_telegram_message(text: str, max_len: int = 3100) -> List[str]:
+def _trim_markdown_to_single_message(text: str, max_md_len: int = 3400) -> str:
     """
-    Split Markdown/text cleanly on paragraph boundaries BEFORE converting each chunk to Telegram HTML,
-    ensuring every single chunk has 100% balanced tags and stays well below Telegram's 4096-char limit.
+    Ensure Markdown text fits comfortably into a SINGLE Telegram message (<= 4096 HTML chars)
+    by trimming cleanly at a paragraph or sentence boundary if needed.
+    """
+    cleaned = text.replace("\r\n", "\n").strip()
+    if len(cleaned) <= max_md_len:
+        return cleaned
+
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", cleaned) if p.strip()]
+    accum = ""
+    for para in paragraphs:
+        cand = f"{accum}\n\n{para}" if accum else para
+        if len(cand) <= max_md_len:
+            accum = cand
+        else:
+            for sent in re.split(r"(?<=[.!?…])\s+", para):
+                cand_s = f"{accum}\n\n{sent}" if not accum or accum.endswith(tuple(paragraphs)) else f"{accum} {sent}"
+                if len(cand_s) <= max_md_len:
+                    accum = cand_s
+                else:
+                    break
+            break
+
+    if accum and len(accum) >= 400:
+        return accum.strip()
+
+    cut = cleaned[:max_md_len]
+    last_dot = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("\n"))
+    if last_dot > max_md_len // 2:
+        return cut[: last_dot + 1].strip()
+    return cut.strip()
+
+
+def split_html_telegram_message(text: str, max_len: int = 3400) -> List[str]:
+    """
+    Always format the response to fit into a SINGLE Telegram message (1-element list)
+    with 100% balanced HTML tags and length strictly <= 4096 characters.
     """
     if not text or not text.strip():
         return [""]
 
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text.replace("\r\n", "\n")) if p.strip()]
-    chunks_md: List[str] = []
-    current_md = ""
+    for limit in (max_len, 3000, 2600, 2200):
+        trimmed_md = _trim_markdown_to_single_message(text, max_md_len=limit)
+        rendered = markdown_to_telegram_html(trimmed_md)
+        if len(rendered) <= 4050:
+            return [rendered]
 
-    for para in paragraphs:
-        candidate = f"{current_md}\n\n{para}" if current_md else para
-        if len(candidate) <= max_len:
-            current_md = candidate
-        else:
-            if current_md:
-                chunks_md.append(current_md)
-            if len(para) <= max_len:
-                current_md = para
-            else:
-                # Split oversized single paragraph by lines
-                lines = para.split("\n")
-                sub = ""
-                for ln in lines:
-                    cand_ln = f"{sub}\n{ln}" if sub else ln
-                    if len(cand_ln) <= max_len:
-                        sub = cand_ln
-                    else:
-                        if sub:
-                            chunks_md.append(sub)
-                        sub = ln[:max_len]
-                current_md = sub
-
-    if current_md:
-        chunks_md.append(current_md)
-
-    html_chunks = [markdown_to_telegram_html(c) for c in chunks_md if c.strip()]
-    return html_chunks if html_chunks else [markdown_to_telegram_html(text)]
+    fallback = markdown_to_telegram_html(_trim_markdown_to_single_message(text, max_md_len=1800))
+    return [fallback[:4050]]
