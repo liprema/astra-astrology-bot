@@ -24,7 +24,7 @@ class LLMService:
         self.gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.groq_key = os.getenv("GROQ_API_KEY", "")
 
-    async def _call_gemini(self, prompt: str, system_prompt: str) -> Optional[str]:
+    async def _call_gemini(self, prompt: str, system_prompt: str, history: Optional[list] = None) -> Optional[str]:
         if not self.gemini_key:
             return None
         models_to_try = [
@@ -60,7 +60,7 @@ class LLMService:
                     continue
         return None
 
-    async def _call_groq(self, prompt: str, system_prompt: str) -> Optional[str]:
+    async def _call_groq(self, prompt: str, system_prompt: str, history: Optional[list] = None) -> Optional[str]:
         if not self.groq_key:
             return None
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -89,16 +89,16 @@ class LLMService:
             pass
         return None
 
-    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
+    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None, history: Optional[list] = None) -> str:
         system_prompt = self._build_kairos_prompt(mode, project_context, workload_info)
-        reply = await self._call_gemini(user_message, system_prompt)
+        reply = await self._call_gemini(user_message, system_prompt, history=history)
         if not reply:
-            reply = await self._call_groq(user_message, system_prompt)
+            reply = await self._call_groq(user_message, system_prompt, history=history)
         if reply:
             return reply
         return "Салют! Я на связи ⚡️ Давай накидывать идеи, о чём думаешь?"
 
-    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str) -> str:
+    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str, history: Optional[list] = None) -> str:
         system_prompt = f"""
 Ты — Хрона. Тебе 25 лет. Ты хранительница времени, личный продюсер и близкая подруга для Полины и её мужа.
 Они занимаются вайбкодингом (Полина делает игру в Steam про Хроники Акаши и богов, муж — игры для Яндекс.Игр), плюс учёба и бизнес.
@@ -113,9 +113,9 @@ class LLMService:
 Расписание: {current_schedule}
 Проекты: {projects_list}
 """
-        reply = await self._call_gemini(user_message, system_prompt)
+        reply = await self._call_gemini(user_message, system_prompt, history=history)
         if not reply:
-            reply = await self._call_groq(user_message, system_prompt)
+            reply = await self._call_groq(user_message, system_prompt, history=history)
         if reply:
             return reply
         return "Привет! Я рядышком и слежу за графиком 🌸 Что у нас по планам?"

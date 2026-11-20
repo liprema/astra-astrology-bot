@@ -178,14 +178,19 @@ async def on_user_message(message: types.Message, bot: Bot):
         r_text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
         r_author = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
         if r_text:
-            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:350]}»]
+            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]
 {message.text}"
             
+    chat_history = db.get_chat_history(message.chat.id, limit=10)
+    db.add_chat_message(message.chat.id, message.from_user.id, "user", user_prompt)
+
     reply = await llm.generate_chrona_reply_async(
         user_message=user_prompt,
         current_schedule=sched_summary,
-        projects_list=proj_summary
+        projects_list=proj_summary,
+        history=chat_history
     )
+    db.add_chat_message(message.chat.id, message.from_user.id, "assistant", reply)
     try:
         formatted = markdown_to_telegram_html(reply)
         await message.answer(formatted, parse_mode="HTML")

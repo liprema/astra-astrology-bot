@@ -180,3 +180,47 @@ class EcosystemDB:
             cursor = conn.cursor()
             cursor.execute("SELECT bot_name FROM group_message_claims WHERE chat_id = ? AND message_id = ?", (chat_id, message_id))
             return cursor.fetchone() is not None
+
+    # --- История сообщений для памяти и контекста ---
+    def add_chat_message(self, chat_id: int, user_id: int, role: str, content: str):
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                user_id INTEGER,
+                role TEXT,
+                content TEXT,
+                created_at TEXT
+            )
+            """)
+            cursor.execute("""
+            INSERT INTO messages (chat_id, user_id, role, content, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """, (chat_id, user_id, role, content, now))
+            conn.commit()
+
+    def get_chat_history(self, chat_id: int, limit: int = 15) -> List[Dict[str, str]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                user_id INTEGER,
+                role TEXT,
+                content TEXT,
+                created_at TEXT
+            )
+            """)
+            cursor.execute("""
+            SELECT role, content FROM messages
+            WHERE chat_id = ?
+            ORDER BY id DESC LIMIT ?
+            """, (chat_id, limit))
+            rows = cursor.fetchall()
+            res = [dict(row) for row in rows]
+            res.reverse()
+            return res

@@ -190,15 +190,20 @@ async def on_user_message(message: types.Message, bot: Bot):
         r_text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
         r_author = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
         if r_text:
-            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:350]}»]
+            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]
 {message.text}"
             
+    chat_history = db.get_chat_history(message.chat.id, limit=10)
+    db.add_chat_message(message.chat.id, user_id, "user", user_prompt)
+
     reply = await llm.generate_kairos_reply_async(
         user_message=user_prompt,
         mode=mode,
         project_context=project_context,
-        workload_info=workload
+        workload_info=workload,
+        history=chat_history
     )
+    db.add_chat_message(message.chat.id, user_id, "assistant", reply)
     
     inline_kb = None
     if mode == "consulting":
