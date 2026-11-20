@@ -6,6 +6,7 @@ import re
 import sqlite3
 import sys
 import time
+import traceback
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -20,7 +21,7 @@ from aiogram.enums import ChatAction, ParseMode
 from aiogram.filters import Command
 import httpx
 
-from bot.formatter import markdown_to_telegram_html, strip_html_tags
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("ecosystem")
@@ -179,14 +180,19 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
 dp_kairos = Dispatcher()
 dp_chrona = Dispatcher()
 
-# Helper for sending replies cleanly
+# Helper for sending replies cleanly (matching Astra's safe splitter)
 async def send_response(message: types.Message, text: str):
     try:
-        html_text = markdown_to_telegram_html(text)
-        await message.reply(html_text, parse_mode=ParseMode.HTML)
-    except Exception:
-        plain_text = strip_html_tags(text)
-        await message.reply(plain_text)
+        parts = split_html_telegram_message(markdown_to_telegram_html(text))
+        for part in parts:
+            try:
+                await message.reply(part, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.warning("HTML reply failed, retrying plain text: %s", e)
+                await message.reply(strip_html_tags(part))
+    except Exception as e:
+        logger.error("send_response outer error: %s\n%s", e, traceback.format_exc())
+        await message.reply(strip_html_tags(text)[:4000])
 
 # Regex matching any mention of Kairos or Chrona with any declensions/username
 def is_kairos_wake(text: str) -> bool:
@@ -215,40 +221,42 @@ async def kairos_start(message: types.Message):
 
 @dp_kairos.message(F.text)
 async def kairos_msg(message: types.Message, bot: Bot):
-    text = (message.text or "").strip()
-    if not text:
-        return
-    chat_id = message.chat.id
-    user_id = message.from_user.id if message.from_user else 0
-    is_private = message.chat.type == "private"
-
-    has_wake = is_kairos_wake(text)
-    is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-    mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|хрон[а-яё]+|chrona)", text, re.I))
-
-    if not is_private:
-        # In groups, respond if named or replied to
-        if mentions_other and not has_wake and not is_reply_to_me:
+    try:
+        text = (message.text or "").strip()
+        if not text:
             return
-        if not (has_wake or is_reply_to_me):
-            kw = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг", "ии", "нейросет"]
-            if not any(k in text.lower() for k in kw):
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else 0
+        is_private = message.chat.type == "private"
+
+        has_wake = is_kairos_wake(text)
+        is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
+        mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|хрон[а-яё]+|chrona)", text, re.I))
+
+        if not is_private:
+            if mentions_other and not has_wake and not is_reply_to_me:
                 return
+            if not (has_wake or is_reply_to_me):
+                kw = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг", "ии", "нейросет"]
+                if not any(k in text.lower() for k in kw):
+                    return
 
-    user_prompt = text
-    if message.reply_to_message:
-        r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
-        r_auth = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
-        if r_txt:
-            user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
+        user_prompt = text
+        if message.reply_to_message:
+            r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+            r_auth = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
+            if r_txt:
+                user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
 
-    history = store.get_history("kairos", chat_id)
-    store.add_message("kairos", chat_id, user_id, "user", user_prompt)
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        history = store.get_history("kairos", chat_id)
+        store.add_message("kairos", chat_id, user_id, "user", user_prompt)
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    reply = await call_llm(KAIROS_SYSTEM, history, user_prompt)
-    store.add_message("kairos", chat_id, user_id, "assistant", reply)
-    await send_response(message, reply)
+        reply = await call_llm(KAIROS_SYSTEM, history, user_prompt)
+        store.add_message("kairos", chat_id, user_id, "assistant", reply)
+        await send_response(message, reply)
+    except Exception as e:
+        logger.error("kairos_msg unhandled error: %s\n%s", e, traceback.format_exc())
 
 # --- Chrona ---
 @dp_chrona.message(Command("start", "help"))
@@ -264,40 +272,42 @@ async def chrona_start(message: types.Message):
 
 @dp_chrona.message(F.text)
 async def chrona_msg(message: types.Message, bot: Bot):
-    text = (message.text or "").strip()
-    if not text:
-        return
-    chat_id = message.chat.id
-    user_id = message.from_user.id if message.from_user else 0
-    is_private = message.chat.type == "private"
-
-    has_wake = is_chrona_wake(text)
-    is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-    mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|кайрос[а-яё]*|kairos)", text, re.I))
-
-    if not is_private:
-        # In groups, respond if named or replied to
-        if mentions_other and not has_wake and not is_reply_to_me:
+    try:
+        text = (message.text or "").strip()
+        if not text:
             return
-        if not (has_wake or is_reply_to_me):
-            kw = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг", "план"]
-            if not any(k in text.lower() for k in kw):
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else 0
+        is_private = message.chat.type == "private"
+
+        has_wake = is_chrona_wake(text)
+        is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
+        mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|кайрос[а-яё]*|kairos)", text, re.I))
+
+        if not is_private:
+            if mentions_other and not has_wake and not is_reply_to_me:
                 return
+            if not (has_wake or is_reply_to_me):
+                kw = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг", "план"]
+                if not any(k in text.lower() for k in kw):
+                    return
 
-    user_prompt = text
-    if message.reply_to_message:
-        r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
-        r_auth = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
-        if r_txt:
-            user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
+        user_prompt = text
+        if message.reply_to_message:
+            r_txt = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+            r_auth = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
+            if r_txt:
+                user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
 
-    history = store.get_history("chrona", chat_id)
-    store.add_message("chrona", chat_id, user_id, "user", user_prompt)
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        history = store.get_history("chrona", chat_id)
+        store.add_message("chrona", chat_id, user_id, "user", user_prompt)
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    reply = await call_llm(CHRONA_SYSTEM, history, user_prompt)
-    store.add_message("chrona", chat_id, user_id, "assistant", reply)
-    await send_response(message, reply)
+        reply = await call_llm(CHRONA_SYSTEM, history, user_prompt)
+        store.add_message("chrona", chat_id, user_id, "assistant", reply)
+        await send_response(message, reply)
+    except Exception as e:
+        logger.error("chrona_msg unhandled error: %s\n%s", e, traceback.format_exc())
 
 async def start_web():
     app = web.Application()
