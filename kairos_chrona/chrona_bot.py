@@ -21,7 +21,7 @@ from shared_bridge import should_bot_handle_message
 
 load_dotenv()
 
-CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN")
+CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "9079738210:AAHZCtzs0ApWQ3rkAkvO-A7gtazdbkHBWjY")
 DB_PATH = os.getenv("DB_PATH", "data/ecosystem.db")
 
 db = EcosystemDB(DB_PATH)

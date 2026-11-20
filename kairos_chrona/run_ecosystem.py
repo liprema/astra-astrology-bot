@@ -1,33 +1,26 @@
 import sys, os
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import asyncio
-import os
 import traceback
 from aiohttp import web
 from dotenv import load_dotenv
 
 load_dotenv()
 
-async def start_kairos():
+async def run_bot_safe(bot_module_name: str, bot_icon: str):
     while True:
         try:
-            print("⚡️ Starting Kairos bot...")
-            import kairos_bot
-            await kairos_bot.main()
+            print(f"{bot_icon} Starting {bot_module_name}...")
+            mod = __import__(bot_module_name)
+            if hasattr(mod, 'main'):
+                await mod.main()
+            else:
+                print(f"No main in {bot_module_name}")
+                await asyncio.sleep(5)
         except Exception as e:
-            print(f"❌ Kairos crashed: {e}")
-            traceback.print_exc()
-            await asyncio.sleep(3)
-
-async def start_chrona():
-    while True:
-        try:
-            print("🌸 Starting Chrona bot...")
-            import chrona_bot
-            await chrona_bot.main()
-        except Exception as e:
-            print(f"❌ Chrona crashed: {e}")
+            print(f"❌ {bot_module_name} crashed: {e}")
             traceback.print_exc()
             await asyncio.sleep(3)
 
@@ -49,8 +42,8 @@ async def main():
     print("🚀 Запуск экосистемы Telegram-ботов: Кайрос ⚡️ + Хрона 🌸")
     await asyncio.gather(
         start_web_server(),
-        start_kairos(),
-        start_chrona()
+        run_bot_safe("kairos_bot", "⚡️"),
+        run_bot_safe("chrona_bot", "🌸")
     )
 
 if __name__ == "__main__":
