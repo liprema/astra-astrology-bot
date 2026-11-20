@@ -297,7 +297,7 @@ async def handle_text_message(message: Message, bot: Bot) -> None:
 
     has_wake_word = contains_arcana_wake_word(text)
     mentions_other_bot = bool(
-        re.search(r"(?:астр[аеуойы]|astra|матрикс[ауеом]?|матриц[аеуейы]|matrix)", text, re.I)
+        re.search(r"(?:астр[аеуойы]|astra|матрикс[ауеом]?|матриц[аеуейы]|matrix|кайрос[ауеом]?|kairos|хрон[аеуойы]|chrona)", text, re.I)
     )
     is_reply_to_this_bot = bool(
         message.reply_to_message
