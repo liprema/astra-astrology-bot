@@ -1,3 +1,6 @@
+import sys, os
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import asyncio
 import os
 from aiohttp import web
