@@ -157,10 +157,10 @@ async def on_user_message(message: types.Message, bot: Bot):
     if not message.text:
         return
 
-    # В групповых чатах проверяем координацию с Кайросом, чтобы не дублировать ответы
+    # В групповых чатах проверяем реплаи и координацию
     if message.chat.type in ("group", "supergroup"):
         bot_info = await bot.get_me()
-        if not should_bot_handle_message(message.text, bot_name="chrona", bot_username=bot_info.username):
+        if not should_bot_handle_message(message, bot_name="chrona", bot_info=bot_info):
             return
         
         pass
@@ -172,8 +172,17 @@ async def on_user_message(message: types.Message, bot: Bot):
     proj_summary = ", ".join([p["title"] for p in projects]) or "Нет активных проектов"
     
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    user_prompt = message.text
+    if message.reply_to_message:
+        r_text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        r_author = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
+        if r_text:
+            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:350]}»]
+{message.text}"
+            
     reply = await llm.generate_chrona_reply_async(
-        user_message=message.text,
+        user_message=user_prompt,
         current_schedule=sched_summary,
         projects_list=proj_summary
     )

@@ -162,10 +162,10 @@ async def on_user_message(message: types.Message, bot: Bot):
     if not message.text:
         return
 
-    # В групповых чатах проверяем координацию с Хроной
+    # В групповых чатах проверяем реплаи и координацию
     if message.chat.type in ("group", "supergroup"):
         bot_info = await bot.get_me()
-        if not should_bot_handle_message(message.text, bot_name="kairos", bot_username=bot_info.username):
+        if not should_bot_handle_message(message, bot_name="kairos", bot_info=bot_info):
             return
 
     user_id = message.from_user.id
@@ -184,8 +184,17 @@ async def on_user_message(message: types.Message, bot: Bot):
         pass
 
     workload = bridge.get_workload_status_for_kairos("polina")
+    
+    user_prompt = message.text
+    if message.reply_to_message:
+        r_text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+        r_author = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
+        if r_text:
+            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:350]}»]
+{message.text}"
+            
     reply = await llm.generate_kairos_reply_async(
-        user_message=message.text,
+        user_message=user_prompt,
         mode=mode,
         project_context=project_context,
         workload_info=workload

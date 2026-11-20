@@ -51,42 +51,57 @@ class BridgeService:
             return "🟢 График свободен! Отличное время для вайбкодинга."
         return f"ℹ️ Баланс: {academic} учебных, {business} проектных задач."
 
-def should_bot_handle_message(text: str, bot_name: str, bot_username: Optional[str] = None) -> bool:
+def should_bot_handle_message(message, bot_name: str, bot_info) -> bool:
     """
-    Упрощенный, сверхчувствительный фильтр для групповых чатов:
-    - Любое упоминание имени или тега в любом регистре
-    - Если зовут конкретного бота -> отвечает только он
+    Проверка, должен ли бот отвечать в группе:
+    1. Ответ реплаем (reply_to_message) на сообщение этого бота -> 100% ДА!
+    2. Упоминание по @username бота -> 100% ДА!
+    3. Упоминание имени бота (Хрона / Кайрос) в тексте сообщения -> ДА!
+    4. Если реплай на ДРУГОГО бота, а имя этого не названо -> НЕТ.
+    5. Ключевые слова (только если нет реплая на другого бота).
     """
-    t = (text or "").lower().strip()
-    if not t:
+    text = (message.text or message.caption or "").lower().strip()
+    reply = message.reply_to_message
+
+    # 1. Проверяем реплай
+    if reply and reply.from_user:
+        if bot_info and reply.from_user.id == bot_info.id:
+            return True
+        # Если реплай на кого-то другого, проверяем, позвали ли явно именно нас по имени/тегу
+        replied_to_other = True
+    else:
+        replied_to_other = False
+
+    if not text:
         return False
 
-    chrona_direct = any(k in t for k in ["хрона", "chrona", "хроночк", "хроне", "хрону", "хроной"])
-    kairos_direct = any(k in t for k in ["кайрос", "kairos", "кайросу", "кайроса", "кайросом", "кайросе"])
+    chrona_direct = any(k in text for k in ["хрона", "chrona", "хроночк", "хроне", "хрону", "хроной"])
+    kairos_direct = any(k in text for k in ["кайрос", "kairos", "кайросу", "кайроса", "кайросом", "кайросе"])
 
-    if bot_username:
-        u = bot_username.lower().replace("@", "")
-        if f"@{u}" in t:
+    if bot_info and bot_info.username:
+        u = bot_info.username.lower().replace("@", "")
+        if f"@{u}" in text:
             return True
 
     if bot_name == "kairos":
         if kairos_direct:
             return True
-        if chrona_direct:
+        if chrona_direct or replied_to_other:
             return False
     elif bot_name == "chrona":
         if chrona_direct:
             return True
-        if kairos_direct:
+        if kairos_direct or replied_to_other:
             return False
 
-    # Если в группе просто общее обращение или ключевые слова
-    chrona_keywords = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг"]
-    kairos_keywords = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг"]
+    # Тематические ключевые слова (срабатывают, только если не реплай чужому)
+    if not replied_to_other:
+        chrona_keywords = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг"]
+        kairos_keywords = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг"]
 
-    if any(k in t for k in chrona_keywords) and bot_name == "chrona":
-        return True
-    if any(k in t for k in kairos_keywords) and bot_name == "kairos":
-        return True
+        if any(k in text for k in chrona_keywords) and bot_name == "chrona":
+            return True
+        if any(k in text for k in kairos_keywords) and bot_name == "kairos":
+            return True
 
     return False
