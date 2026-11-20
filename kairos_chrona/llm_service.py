@@ -1,3 +1,21 @@
+from datetime import datetime, timezone, timedelta
+
+RU_MONTHS = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+}
+WEEKDAYS_RU = {
+    0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+    4: "пятница", 5: "суббота", 6: "воскресенье"
+}
+
+def get_live_calendar_banner() -> str:
+    now = datetime.now(timezone(timedelta(hours=3)))
+    m = RU_MONTHS.get(now.month, "ноября")
+    w = WEEKDAYS_RU.get(now.weekday(), "суббота")
+    return f"РЕАЛЬНОЕ ВРЕМЯ И ДЕНЬ: {w.upper()}, {now.day} {m} {now.year} года, {now.strftime('%H:%M')} по Москве. (Сейчас УЖЕ {w.upper()})."
+
 import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +65,9 @@ class LLMService:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_key}"
                 payload = {
-                    "systemInstruction": {"parts": [{"text": f"{system_prompt}
+                    "systemInstruction": {"parts": [{"text": f"{get_live_calendar_banner()}
+
+{system_prompt}
 
 {HTML_STYLE_INSTRUCTION}"}]},
                     "contents": contents,
@@ -81,7 +101,9 @@ class LLMService:
             "Authorization": f"Bearer {self.groq_key}",
             "Content-Type": "application/json"
         }
-        messages = [{"role": "system", "content": f"{system_prompt}
+        messages = [{"role": "system", "content": f"{get_live_calendar_banner()}
+
+{system_prompt}
 
 {HTML_STYLE_INSTRUCTION}"}]
         if history:

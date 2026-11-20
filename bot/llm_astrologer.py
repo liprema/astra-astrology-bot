@@ -31,15 +31,20 @@ RU_MONTH_NAMES_GEN = {
 }
 
 
+WEEKDAYS_RU = {
+    0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+    4: "пятница", 5: "суббота", 6: "воскресенье"
+}
+
 def get_current_date_banner_ru() -> str:
     tz = pytz.timezone("Europe/Moscow")
     now = datetime.datetime.now(tz)
     year = max(2026, now.year)
     m_name = RU_MONTH_NAMES_GEN.get(now.month, "ноября")
+    weekday = WEEKDAYS_RU.get(now.weekday(), "")
     return (
-        f"СЕГОДНЯШНЯЯ РЕАЛЬНАЯ ДАТА: {now.day} {m_name} {year} года "
-        f"(сейчас идёт конец {year} года, впереди наступающий {year + 1} год). "
-        f"СТРОГО ЗАПРЕЩЕНО считать текущим 2024 или 2025 год! Текущий год — {year}, следующий год — {year + 1}."
+        f"СЕГОДНЯШНЯЯ ТОЧНАЯ ДАТА И ДЕНЬ НЕДЕЛИ: {weekday.upper()}, {now.day} {m_name} {year} года, текущее время {now.strftime('%H:%M')} по Москве. "
+        f"(Внимание: СЕЙЧАС УЖЕ {weekday.upper()}! Не путай с предыдущим днем недели. Текущий год — {year}, наступает {year + 1})."
     )
 
 
