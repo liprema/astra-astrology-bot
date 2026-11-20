@@ -4,7 +4,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import httpx
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 HTML_STYLE_INSTRUCTION = """
 ВАЖНЫЕ ПРАВИЛА ОБЩЕНИЯ И РАЗМЕТКИ (TELEGRAM):
@@ -24,7 +24,7 @@ class LLMService:
         self.gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
         self.groq_key = os.getenv("GROQ_API_KEY", "")
 
-    async def _call_gemini(self, prompt: str, system_prompt: str, history: Optional[list] = None) -> Optional[str]:
+    async def _call_gemini(self, prompt: str, system_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> Optional[str]:
         if not self.gemini_key:
             return None
         models_to_try = [
@@ -33,12 +33,24 @@ class LLMService:
             "gemini-2.5-flash-lite",
             "gemini-3.8-flash"
         ]
+        
+        contents = []
+        if history:
+            for h in history:
+                r = "user" if h.get("role") == "user" else "model"
+                c = (h.get("content") or "").strip()
+                if c:
+                    contents.append({"role": r, "parts": [{"text": c}]})
+        contents.append({"role": "user", "parts": [{"text": prompt}]})
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_key}"
                 payload = {
-                    "systemInstruction": {"parts": [{"text": f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"}]},
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "systemInstruction": {"parts": [{"text": f"{system_prompt}
+
+{HTML_STYLE_INSTRUCTION}"}]},
+                    "contents": contents,
                     "generationConfig": {
                         "temperature": 0.7,
                         "maxOutputTokens": 2048
@@ -55,12 +67,13 @@ class LLMService:
                             if not text_parts:
                                 text_parts = [p["text"] for p in parts if "text" in p]
                             if text_parts:
-                                return "\n".join(text_parts)
+                                return "
+".join(text_parts)
                 except Exception:
                     continue
         return None
 
-    async def _call_groq(self, prompt: str, system_prompt: str, history: Optional[list] = None) -> Optional[str]:
+    async def _call_groq(self, prompt: str, system_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> Optional[str]:
         if not self.groq_key:
             return None
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -68,12 +81,20 @@ class LLMService:
             "Authorization": f"Bearer {self.groq_key}",
             "Content-Type": "application/json"
         }
+        messages = [{"role": "system", "content": f"{system_prompt}
+
+{HTML_STYLE_INSTRUCTION}"}]
+        if history:
+            for h in history:
+                r = "user" if h.get("role") == "user" else "assistant"
+                c = (h.get("content") or "").strip()
+                if c:
+                    messages.append({"role": r, "content": c})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"},
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "temperature": 0.7,
             "max_tokens": 2048
         }
@@ -89,7 +110,7 @@ class LLMService:
             pass
         return None
 
-    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None, history: Optional[list] = None) -> str:
+    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = self._build_kairos_prompt(mode, project_context, workload_info)
         reply = await self._call_gemini(user_message, system_prompt, history=history)
         if not reply:
@@ -98,7 +119,7 @@ class LLMService:
             return reply
         return "Салют! Я на связи ⚡️ Давай накидывать идеи, о чём думаешь?"
 
-    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str, history: Optional[list] = None) -> str:
+    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = f"""
 Ты — Хрона. Тебе 25 лет. Ты хранительница времени, личный продюсер и близкая подруга для Полины и её мужа.
 Они занимаются вайбкодингом (Полина делает игру в Steam про Хроники Акаши и богов, муж — игры для Яндекс.Игр), плюс учёба и бизнес.
@@ -132,7 +153,9 @@ class LLMService:
 - Если просто болтаем: отвечай КОРОТКО (1-3 живые фразы), без духоты.
 - Если просят сделать ПРОФЕССИОНАЛЬНЫЙ РАЗБОР (идею игры, лор богов, механику для Яндекс.Игр, разбор вишлистов Steam, монетизацию, сюжетный поворот, код): выкладывайся НА МАКСИМУМ — пиши СУПЕР-ПОДРОБНО, с крутыми идеями, по пунктам, с примерами, но простыми и понятными словами!
 """
-        workload_context = f"\n[Нагрузка от Хроны]: {workload_info}\n" if workload_info else ""
+        workload_context = f"
+[Нагрузка от Хроны]: {workload_info}
+" if workload_info else ""
         if mode == "steam_myth":
             mode_desc = "ФОКУС: 🏛 Steam (Хроники Акаши, пантеоны богов, сюжет, квесты, удержание игроков, оформление страницы)."
         elif mode == "yandex_games":
@@ -144,4 +167,6 @@ class LLMService:
         else:
             mode_desc = "ФОКУС: Дружеский разговор, вайбкодинг."
 
-        return f"{base_personality}\n{mode_desc}\n{workload_context}"
+        return f"{base_personality}
+{mode_desc}
+{workload_context}"

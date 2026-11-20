@@ -67,8 +67,12 @@ def should_bot_handle_message(message, bot_name: str, bot_info) -> bool:
     if reply and reply.from_user:
         if bot_info and reply.from_user.id == bot_info.id:
             return True
-        # Если реплай на кого-то другого, проверяем, позвали ли явно именно нас по имени/тегу
-        replied_to_other = True
+        # Если реплай сделан именно на ДРУГОГО БОТА (is_bot == True)
+        if getattr(reply.from_user, "is_bot", False):
+            replied_to_other = True
+        else:
+            # Реплай на обычного человека не блокирует триггеры
+            replied_to_other = False
     else:
         replied_to_other = False
 
