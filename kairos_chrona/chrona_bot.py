@@ -154,7 +154,7 @@ async def cmd_add_task(message: types.Message):
     )
     await message.answer(f"✅ Зафиксировала: **{title}** на `{date_str}` в категорию `{category}`!", parse_mode="Markdown")
 
-@dp.message()
+@dp.message(F.text)
 async def on_user_message(message: types.Message, bot: Bot):
     if not message.text:
         return

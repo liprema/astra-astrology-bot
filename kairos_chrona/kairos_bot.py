@@ -159,7 +159,7 @@ async def cmd_take_project(message: types.Message):
         parse_mode="HTML"
     )
 
-@dp.message()
+@dp.message(F.text)
 async def on_user_message(message: types.Message, bot: Bot):
     if not message.text:
         return
