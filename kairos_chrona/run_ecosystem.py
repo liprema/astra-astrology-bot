@@ -188,6 +188,17 @@ async def send_response(message: types.Message, text: str):
         plain_text = strip_html_tags(text)
         await message.reply(plain_text)
 
+# Regex matching any mention of Kairos or Chrona with any declensions/username
+def is_kairos_wake(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"(?:^|[^\w])(кайрос[а-яё]*|kairos|your_kairos_bot)(?:$|[^\w])", text, re.I))
+
+def is_chrona_wake(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"(?:^|[^\w])(хрон[а-яё]+|chrona|your_chrona_bot)(?:$|[^\w])", text, re.I))
+
 # --- Kairos ---
 @dp_kairos.message(Command("start", "help"))
 async def kairos_start(message: types.Message):
@@ -211,11 +222,12 @@ async def kairos_msg(message: types.Message, bot: Bot):
     user_id = message.from_user.id if message.from_user else 0
     is_private = message.chat.type == "private"
 
-    has_wake = bool(re.search(r"(?:^|[^\w\d])([кk][аa][йy][рp][оo][сc]|kairos)(?:$|[^\w\d])", text, re.I))
+    has_wake = is_kairos_wake(text)
     is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-    mentions_other = bool(re.search(r"(?:астр[аеуойы]|astra|аркан[аеуойы]|arcana|матрикс[ауеом]?|matrix|хрон[аеуойы]|chrona)", text, re.I))
+    mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|хрон[а-яё]+|chrona)", text, re.I))
 
     if not is_private:
+        # In groups, respond if named or replied to
         if mentions_other and not has_wake and not is_reply_to_me:
             return
         if not (has_wake or is_reply_to_me):
@@ -259,11 +271,12 @@ async def chrona_msg(message: types.Message, bot: Bot):
     user_id = message.from_user.id if message.from_user else 0
     is_private = message.chat.type == "private"
 
-    has_wake = bool(re.search(r"(?:^|[^\w\d])([хx][рp][оo][нn][аaуyеeоoиiіыює][йюя]?|chrona)(?:$|[^\w\d])", text, re.I))
+    has_wake = is_chrona_wake(text)
     is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-    mentions_other = bool(re.search(r"(?:астр[аеуойы]|astra|аркан[аеуойы]|arcana|матрикс[ауеом]?|matrix|кайрос[ауеом]?|kairos)", text, re.I))
+    mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|кайрос[а-яё]*|kairos)", text, re.I))
 
     if not is_private:
+        # In groups, respond if named or replied to
         if mentions_other and not has_wake and not is_reply_to_me:
             return
         if not (has_wake or is_reply_to_me):
@@ -306,8 +319,8 @@ async def main():
     logger.info("Starting Kairos & Chrona polling...")
     try:
         await asyncio.gather(
-            dp_kairos.start_polling(bot_k, allowed_updates=dp_kairos.resolve_used_update_types()),
-            dp_chrona.start_polling(bot_c, allowed_updates=dp_chrona.resolve_used_update_types())
+            dp_kairos.start_polling(bot_k, allowed_updates=["message"]),
+            dp_chrona.start_polling(bot_c, allowed_updates=["message"])
         )
     finally:
         await runner.cleanup()
