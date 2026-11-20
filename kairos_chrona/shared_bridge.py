@@ -52,32 +52,13 @@ class BridgeService:
         return f"ℹ️ Баланс: {academic} учебных, {business} проектных задач."
 
 def should_bot_handle_message(message, bot_name: str, bot_info) -> bool:
-    """
-    Проверка, должен ли бот отвечать в группе:
-    1. Ответ реплаем (reply_to_message) на сообщение этого бота -> 100% ДА!
-    2. Упоминание по @username бота -> 100% ДА!
-    3. Упоминание имени бота (Хрона / Кайрос) в тексте сообщения -> ДА!
-    4. Если реплай на ДРУГОГО бота, а имя этого не названо -> НЕТ.
-    5. Ключевые слова (только если нет реплая на другого бота).
-    """
     text = (message.text or message.caption or "").lower().strip()
     reply = message.reply_to_message
 
-    # 1. Проверяем реплай
+    # 1. Если реплай именно на этого бота -> всегда ДА!
     if reply and reply.from_user:
         if bot_info and reply.from_user.id == bot_info.id:
             return True
-        # Если реплай сделан именно на ДРУГОГО БОТА (is_bot == True)
-        if getattr(reply.from_user, "is_bot", False):
-            replied_to_other = True
-        else:
-            # Реплай на обычного человека не блокирует триггеры
-            replied_to_other = False
-    else:
-        replied_to_other = False
-
-    if not text:
-        return False
 
     chrona_direct = any(k in text for k in ["хрона", "chrona", "хроночк", "хроне", "хрону", "хроной"])
     kairos_direct = any(k in text for k in ["кайрос", "kairos", "кайросу", "кайроса", "кайросом", "кайросе"])
@@ -87,25 +68,30 @@ def should_bot_handle_message(message, bot_name: str, bot_info) -> bool:
         if f"@{u}" in text:
             return True
 
-    if bot_name == "kairos":
-        if kairos_direct:
-            return True
-        if chrona_direct or replied_to_other:
-            return False
-    elif bot_name == "chrona":
-        if chrona_direct:
-            return True
-        if kairos_direct or replied_to_other:
+    # 2. Прямой вызов по имени
+    if bot_name == "kairos" and kairos_direct:
+        return True
+    if bot_name == "chrona" and chrona_direct:
+        return True
+
+    # 3. Если вызвали другого конкретного бота по имени
+    if bot_name == "kairos" and chrona_direct:
+        return False
+    if bot_name == "chrona" and kairos_direct:
+        return False
+
+    # 4. Если это реплай на сообщение другого бота, а нас по имени не позвали
+    if reply and reply.from_user and getattr(reply.from_user, "is_bot", False):
+        if bot_info and reply.from_user.id != bot_info.id:
             return False
 
-    # Тематические ключевые слова (срабатывают, только если не реплай чужому)
-    if not replied_to_other:
-        chrona_keywords = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг"]
-        kairos_keywords = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг"]
+    # 5. Ключевые слова
+    chrona_keywords = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг"]
+    kairos_keywords = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг", "ии"]
 
-        if any(k in text for k in chrona_keywords) and bot_name == "chrona":
-            return True
-        if any(k in text for k in kairos_keywords) and bot_name == "kairos":
-            return True
+    if any(k in text for k in chrona_keywords) and bot_name == "chrona":
+        return True
+    if any(k in text for k in kairos_keywords) and bot_name == "kairos":
+        return True
 
     return False
