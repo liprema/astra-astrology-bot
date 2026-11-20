@@ -163,9 +163,7 @@ async def on_user_message(message: types.Message, bot: Bot):
         if not should_bot_handle_message(message.text, bot_name="chrona", bot_username=bot_info.username):
             return
         
-        # Атомарный захват сообщения в БД: если Кайрос уже ответил/отвечает, Хрона молчит
-        # claim disabled
-            return
+        pass
 
     today = datetime.now().strftime("%Y-%m-%d")
     today_items = db.get_schedule_for_date(today)

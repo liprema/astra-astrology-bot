@@ -28,13 +28,12 @@ class LLMService:
         if not self.gemini_key:
             return None
         models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
             "gemini-flash-lite-latest",
             "gemini-3-flash-preview",
+            "gemini-2.5-flash-lite",
             "gemini-3.8-flash"
         ]
-        async with httpx.AsyncClient(timeout=25.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_key}"
                 payload = {
@@ -79,7 +78,7 @@ class LLMService:
             "max_tokens": 2048
         }
         try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(url, headers=headers, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
