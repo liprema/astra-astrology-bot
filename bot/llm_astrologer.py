@@ -169,10 +169,10 @@ async def _call_llm_inner(
     full_sys = f"{get_current_date_banner_ru()}\n\n{system_prompt}"
     if GEMINI_API_KEY:
         models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-3-flash-preview",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
             "gemini-flash-lite-latest",
-            "gemini-2.0-flash",
+            "gemini-3.1-flash-lite",
         ]
         async with httpx.AsyncClient(timeout=18.0) as client:
             for model_name in models_to_try:

@@ -53,7 +53,7 @@ class DialogStore:
                 (bot_name, chat_id, user_id, role, content, time.time())
             )
 
-    def get_history(self, bot_name: str, chat_id: int, limit: int = 12) -> List[Dict[str, str]]:
+    def get_history(self, bot_name: str, chat_id: int, limit: int = 10) -> List[Dict[str, str]]:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 "SELECT role, content FROM messages WHERE bot_name = ? AND chat_id = ? ORDER BY id DESC LIMIT ?",
@@ -107,17 +107,29 @@ CHRONA_SYSTEM = """Ты — ХРОНА (Chrona). Тебе 25 лет. Ты хра
 
 async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_message: str) -> str:
     full_sys = f"{get_current_date_banner()}\n\n{system_prompt}"
+    
+    # Format contents with strict alternating user/model turns
     contents = []
-    for h in history[-8:]:
-        r = "user" if h.get("role") == "user" else "model"
-        c = (h.get("content") or "").strip()
-        if c:
-            contents.append({"role": r, "parts": [{"text": c}]})
-    contents.append({"role": "user", "parts": [{"text": user_message}]})
+    last_role = None
+    for h in history[-6:]:
+        role = "user" if h.get("role") == "user" else "model"
+        txt = (h.get("content") or "").strip()
+        if not txt:
+            continue
+        if role == last_role:
+            contents[-1]["parts"][0]["text"] += f"\n\n{txt}"
+        else:
+            contents.append({"role": role, "parts": [{"text": txt}]})
+            last_role = role
+    
+    if last_role == "user":
+        contents[-1]["parts"][0]["text"] += f"\n\n{user_message}"
+    else:
+        contents.append({"role": "user", "parts": [{"text": user_message}]})
 
-    models = ["gemini-flash-lite-latest", "gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemini-3.8-flash"]
+    models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
     if GEMINI_KEY:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             for m in models:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                 payload = {
@@ -136,19 +148,20 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                                 tp = [p["text"] for p in parts if "text" in p]
                             if tp:
                                 return "\n".join(tp).strip()
-                except Exception:
+                except Exception as e:
+                    logger.warning("Gemini model %s error: %s", m, e)
                     continue
 
     if GROQ_KEY:
         messages = [{"role": "system", "content": full_sys}]
-        for h in history[-8:]:
+        for h in history[-6:]:
             r = "user" if h.get("role") == "user" else "assistant"
             c = (h.get("content") or "").strip()
             if c:
                 messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_message})
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
@@ -158,13 +171,22 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                     ch = resp.json().get("choices", [])
                     if ch:
                         return ch[0]["message"]["content"].strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Groq error: %s", e)
 
     return "Салют! Я на связи ⚡️🌸 Чем займёмся?"
 
 dp_kairos = Dispatcher()
 dp_chrona = Dispatcher()
+
+# Helper for sending replies cleanly
+async def send_response(message: types.Message, text: str):
+    try:
+        html_text = markdown_to_telegram_html(text)
+        await message.reply(html_text, parse_mode=ParseMode.HTML)
+    except Exception:
+        plain_text = strip_html_tags(text)
+        await message.reply(plain_text)
 
 # --- Kairos ---
 @dp_kairos.message(Command("start", "help"))
@@ -178,7 +200,7 @@ async def kairos_start(message: types.Message):
         "• 💡 <b>Бизнес-консалтинг</b> — разбор идей, MVP за выходные, поиск ЦА.\n\n"
         "Просто пиши, что на уме — накидаем план!"
     )
-    await message.reply(markdown_to_telegram_html(greeting), parse_mode=ParseMode.HTML)
+    await send_response(message, greeting)
 
 @dp_kairos.message(F.text)
 async def kairos_msg(message: types.Message, bot: Bot):
@@ -214,10 +236,7 @@ async def kairos_msg(message: types.Message, bot: Bot):
 
     reply = await call_llm(KAIROS_SYSTEM, history, user_prompt)
     store.add_message("kairos", chat_id, user_id, "assistant", reply)
-    try:
-        await message.reply(markdown_to_telegram_html(reply), parse_mode=ParseMode.HTML)
-    except Exception:
-        await message.reply(strip_html_tags(reply))
+    await send_response(message, reply)
 
 # --- Chrona ---
 @dp_chrona.message(Command("start", "help"))
@@ -229,7 +248,7 @@ async def chrona_start(message: types.Message):
         "Мы работаем в связке с <b>Кайросом</b>: он накидывает идеи, а я помогаю встроить их в реальный график.\n\n"
         "Напиши мне о своих планах, дедлайнах или спроси совет по расписанию!"
     )
-    await message.reply(markdown_to_telegram_html(greeting), parse_mode=ParseMode.HTML)
+    await send_response(message, greeting)
 
 @dp_chrona.message(F.text)
 async def chrona_msg(message: types.Message, bot: Bot):
@@ -265,10 +284,7 @@ async def chrona_msg(message: types.Message, bot: Bot):
 
     reply = await call_llm(CHRONA_SYSTEM, history, user_prompt)
     store.add_message("chrona", chat_id, user_id, "assistant", reply)
-    try:
-        await message.reply(markdown_to_telegram_html(reply), parse_mode=ParseMode.HTML)
-    except Exception:
-        await message.reply(strip_html_tags(reply))
+    await send_response(message, reply)
 
 async def start_web():
     app = web.Application()
