@@ -20,21 +20,22 @@ HTML_STYLE_INSTRUCTION = """
 
 class LLMService:
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.groq_key = os.getenv("GROQ_API_KEY", "")
 
-    async def _call_gemini_rest(self, prompt: str, system_prompt: str) -> Optional[str]:
-        if not self.api_key:
+    async def _call_gemini(self, prompt: str, system_prompt: str) -> Optional[str]:
+        if not self.gemini_key:
             return None
         models_to_try = [
             "gemini-2.5-flash",
-            "gemini-3.8-flash",
-            "gemini-3-flash-preview",
             "gemini-2.0-flash",
-            "gemini-flash-lite-latest"
+            "gemini-flash-lite-latest",
+            "gemini-3-flash-preview",
+            "gemini-3.8-flash"
         ]
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             for model_name in models_to_try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_key}"
                 payload = {
                     "systemInstruction": {"parts": [{"text": f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"}]},
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -59,9 +60,40 @@ class LLMService:
                     continue
         return None
 
+    async def _call_groq(self, prompt: str, system_prompt: str) -> Optional[str]:
+        if not self.groq_key:
+            return None
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.groq_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 800
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        return choices[0]["message"]["content"]
+        except Exception:
+            pass
+        return None
+
     async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
         system_prompt = self._build_kairos_prompt(mode, project_context, workload_info)
-        reply = await self._call_gemini_rest(user_message, system_prompt)
+        reply = await self._call_gemini(user_message, system_prompt)
+        if not reply:
+            reply = await self._call_groq(user_message, system_prompt)
         if reply:
             return reply
         return "Салют! Я на связи ⚡️ Слышу тебя отлично, давай накидывать идеи!"
@@ -82,7 +114,9 @@ class LLMService:
 Расписание: {current_schedule}
 Проекты: {projects_list}
 """
-        reply = await self._call_gemini_rest(user_message, system_prompt)
+        reply = await self._call_gemini(user_message, system_prompt)
+        if not reply:
+            reply = await self._call_groq(user_message, system_prompt)
         if reply:
             return reply
         return "Привет! Я тут и слежу за расписанием 🌸 Что у нас по планам?"
