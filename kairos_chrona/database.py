@@ -4,7 +4,10 @@ from datetime import datetime, date
 from typing import List, Dict, Optional, Any
 
 class EcosystemDB:
-    def __init__(self, db_path: str = "/tmp/kairos_chrona/data/ecosystem.db"):
+    def __init__(self, db_path: str = "data/ecosystem.db"):
+        import os
+        from pathlib import Path
+        Path(db_path).resolve().parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self._init_db()
 

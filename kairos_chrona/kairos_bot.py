@@ -22,7 +22,7 @@ load_dotenv()
 
 KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN", "9020108761:AAHHo0otC9UDgC9DQlSTKSG6uyh2R_PEC10")
 CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "9079738210:AAHZCtzs0ApWQ3rkAkvO-A7gtazdbkHBWjY")
-DB_PATH = os.getenv("DB_PATH", "data/ecosystem.db")
+DB_PATH = os.getenv("DB_PATH", str(Path(__file__).resolve().parent / "data" / "ecosystem.db"))
 
 db = EcosystemDB(DB_PATH)
 llm = LLMService()
