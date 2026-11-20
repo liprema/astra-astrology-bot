@@ -169,7 +169,7 @@ async def on_user_message(message: types.Message, bot: Bot):
             return
         
         # Атомарный захват сообщения в БД: если Хрона уже ответила/отвечает, Кайрос молчит
-        if not db.try_claim_message(message.chat.id, message.message_id, "kairos"):
+        # claim disabled
             return
 
     user_id = message.from_user.id

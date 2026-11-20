@@ -157,7 +157,7 @@ async def on_user_message(message: types.Message, bot: Bot):
             return
         
         # Атомарный захват сообщения в БД: если Кайрос уже ответил/отвечает, Хрона молчит
-        if not db.try_claim_message(message.chat.id, message.message_id, "chrona"):
+        # claim disabled
             return
 
     today = datetime.now().strftime("%Y-%m-%d")
