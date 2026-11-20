@@ -9,18 +9,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-async def run_bot_safe(bot_module_name: str, bot_icon: str):
+async def start_kairos_task():
     while True:
         try:
-            print(f"{bot_icon} Starting {bot_module_name}...")
-            mod = __import__(bot_module_name)
-            if hasattr(mod, 'main'):
-                await mod.main()
-            else:
-                print(f"No main in {bot_module_name}")
-                await asyncio.sleep(5)
+            print("⚡️ Starting Kairos bot task...")
+            import kairos_bot
+            await kairos_bot.main()
         except Exception as e:
-            print(f"❌ {bot_module_name} crashed: {e}")
+            print(f"❌ Kairos bot error: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(3)
+
+async def start_chrona_task():
+    while True:
+        try:
+            print("🌸 Starting Chrona bot task...")
+            import chrona_bot
+            await chrona_bot.main()
+        except Exception as e:
+            print(f"❌ Chrona bot error: {e}")
             traceback.print_exc()
             await asyncio.sleep(3)
 
@@ -28,7 +35,7 @@ async def handle_ping(request):
     return web.Response(text="Kairos & Chrona are alive! ⚡️🌸")
 
 async def start_web_server():
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.getenv("PORT", 7863))
     app = web.Application()
     app.router.add_get("/", handle_ping)
     app.router.add_get("/health", handle_ping)
@@ -42,8 +49,8 @@ async def main():
     print("🚀 Запуск экосистемы Telegram-ботов: Кайрос ⚡️ + Хрона 🌸")
     await asyncio.gather(
         start_web_server(),
-        run_bot_safe("kairos_bot", "⚡️"),
-        run_bot_safe("chrona_bot", "🌸")
+        start_kairos_task(),
+        start_chrona_task()
     )
 
 if __name__ == "__main__":

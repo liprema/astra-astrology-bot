@@ -220,7 +220,7 @@ async def main():
         return
     bot = Bot(token=CHRONA_TOKEN)
     print("🌸 Хрона (Хранительница времени) запущена и готова к работе...")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == "__main__":
     asyncio.run(main())
