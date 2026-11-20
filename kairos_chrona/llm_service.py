@@ -26,7 +26,7 @@ class LLMService:
             "temperature": 0.7,
             "max_output_tokens": 800,
         }
-        self.model = genai.GenerativeModel("gemini-2.5-flash", generation_config=self.generation_config)
+        self.model = genai.GenerativeModel("gemini-3.8-flash", generation_config=self.generation_config)
 
     def generate_kairos_reply(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
         """Генерация ответа от лица Кайроса (вайбкодинг-партнер и бро)"""
