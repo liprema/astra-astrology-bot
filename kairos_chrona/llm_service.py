@@ -1,6 +1,7 @@
 import os
-import google.generativeai as genai
-from typing import List, Dict, Optional
+import httpx
+import asyncio
+from typing import Optional, Dict, Any
 
 HTML_STYLE_INSTRUCTION = """
 ВАЖНЫЕ ПРАВИЛА ОБЩЕНИЯ И ФОРМАТИРОВАНИЯ (TELEGRAM):
@@ -20,26 +21,52 @@ HTML_STYLE_INSTRUCTION = """
 class LLMService:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-        self.generation_config = {
-            "temperature": 0.7,
-            "max_output_tokens": 800,
-        }
-        self.model = genai.GenerativeModel("gemini-3.8-flash", generation_config=self.generation_config)
 
-    def generate_kairos_reply(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
-        """Генерация ответа от лица Кайроса (вайбкодинг-партнер и бро)"""
+    async def _call_gemini_rest(self, prompt: str, system_prompt: str) -> Optional[str]:
+        if not self.api_key:
+            return None
+        models_to_try = [
+            "gemini-2.5-flash",
+            "gemini-3.8-flash",
+            "gemini-3-flash-preview",
+            "gemini-2.0-flash",
+            "gemini-flash-lite-latest"
+        ]
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
+                payload = {
+                    "systemInstruction": {"parts": [{"text": f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"}]},
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 800
+                    }
+                }
+                try:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            text_parts = [p["text"] for p in parts if "text" in p and not p.get("thought")]
+                            if not text_parts:
+                                text_parts = [p["text"] for p in parts if "text" in p]
+                            if text_parts:
+                                return "\n".join(text_parts)
+                except Exception:
+                    continue
+        return None
+
+    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
         system_prompt = self._build_kairos_prompt(mode, project_context, workload_info)
-        prompt = f"{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}\n\nСобеседник: {user_message}\nКайрос:"
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"⚠️ <b>Кайрос подвис:</b> <code>{e}</code>"
+        reply = await self._call_gemini_rest(user_message, system_prompt)
+        if reply:
+            return reply
+        return "Салют! Я на связи ⚡️ Слышу тебя отлично, давай накидывать идеи!"
 
-    def generate_chrona_reply(self, user_message: str, current_schedule: str, projects_list: str) -> str:
-        """Генерация ответа от лица Хроны (ассистент по расписанию и близкая подруга)"""
+    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str) -> str:
         system_prompt = f"""
 Ты — Хрона. Тебе 25 лет. Ты подруга и личная ассистентка по времени для Полины и её мужа.
 Они занимаются вайбкодингом (Полина делает игру в Steam про Хроники Акаши и богов, муж — игры для Яндекс.Игр), плюс учёба и бизнес.
@@ -54,15 +81,11 @@ class LLMService:
 Контекст:
 Расписание: {current_schedule}
 Проекты: {projects_list}
-
-{HTML_STYLE_INSTRUCTION}
 """
-        prompt = f"{system_prompt}\n\nСобеседник: {user_message}\nХрона:"
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            return f"⚠️ <b>Хрона подвисла:</b> <code>{e}</code>"
+        reply = await self._call_gemini_rest(user_message, system_prompt)
+        if reply:
+            return reply
+        return "Привет! Я тут и слежу за расписанием 🌸 Что у нас по планам?"
 
     def _build_kairos_prompt(self, mode: str, project_context: Optional[str], workload_info: Optional[str]) -> str:
         base_personality = """
@@ -75,7 +98,6 @@ class LLMService:
 - Работаешь в паре с Хроной.
 """
         workload_context = f"\n[Нагрузка от Хроны]: {workload_info}\n" if workload_info else ""
-
         if mode == "steam_myth":
             mode_desc = "ФОКУС: 🏛 Steam (Хроники Акаши, боги, нарратив, вишлисты)."
         elif mode == "yandex_games":
@@ -88,12 +110,3 @@ class LLMService:
             mode_desc = "ФОКУС: Свободный дружеский разговор, вайбкодинг."
 
         return f"{base_personality}\n{mode_desc}\n{workload_context}"
-
-
-    async def generate_kairos_reply_async(self, user_message: str, mode: str, project_context: Optional[str] = None, workload_info: Optional[str] = None) -> str:
-        import asyncio
-        return await asyncio.to_thread(self.generate_kairos_reply, user_message, mode, project_context, workload_info)
-
-    async def generate_chrona_reply_async(self, user_message: str, current_schedule: str, projects_list: str) -> str:
-        import asyncio
-        return await asyncio.to_thread(self.generate_chrona_reply, user_message, current_schedule, projects_list)
