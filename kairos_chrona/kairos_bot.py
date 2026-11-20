@@ -13,7 +13,7 @@ load_dotenv()
 
 KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN")
 CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN")
-DB_PATH = os.getenv("DB_PATH", "/tmp/kairos_chrona/data/ecosystem.db")
+DB_PATH = os.getenv("DB_PATH", "data/ecosystem.db")
 
 db = EcosystemDB(DB_PATH)
 llm = LLMService()
