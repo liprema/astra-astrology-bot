@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -175,7 +179,14 @@ async def on_user_message(message: types.Message, bot: Bot):
         current_schedule=sched_summary,
         projects_list=proj_summary
     )
-    await message.answer(reply)
+    try:
+        formatted = markdown_to_telegram_html(reply)
+        await message.answer(formatted, parse_mode="HTML")
+    except Exception:
+        try:
+            await message.answer(strip_html_tags(reply))
+        except Exception:
+            await message.answer(reply)
 
 async def main():
     if not CHRONA_TOKEN:

@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bot.formatter import markdown_to_telegram_html, split_html_telegram_message, strip_html_tags
 import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -194,9 +198,13 @@ async def on_user_message(message: types.Message, bot: Bot):
         ])
     
     try:
-        await message.answer(reply, reply_markup=inline_kb, parse_mode="HTML")
+        formatted = markdown_to_telegram_html(reply)
+        await message.answer(formatted, reply_markup=inline_kb, parse_mode="HTML")
     except Exception:
-        await message.answer(reply, reply_markup=inline_kb)
+        try:
+            await message.answer(strip_html_tags(reply), reply_markup=inline_kb)
+        except Exception:
+            await message.answer(reply, reply_markup=inline_kb)
 
 async def main():
     if not KAIROS_TOKEN:
