@@ -2,56 +2,26 @@ import sys, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import asyncio
-import traceback
-from aiohttp import web
-from dotenv import load_dotenv
+import subprocess
+import time
 
-load_dotenv()
-
-async def start_kairos_task():
-    while True:
-        try:
-            print("⚡️ Starting Kairos bot task...")
-            import kairos_bot
-            await kairos_bot.main()
-        except Exception as e:
-            print(f"❌ Kairos bot error: {e}")
-            traceback.print_exc()
-            await asyncio.sleep(3)
-
-async def start_chrona_task():
-    while True:
-        try:
-            print("🌸 Starting Chrona bot task...")
-            import chrona_bot
-            await chrona_bot.main()
-        except Exception as e:
-            print(f"❌ Chrona bot error: {e}")
-            traceback.print_exc()
-            await asyncio.sleep(3)
-
-async def handle_ping(request):
-    return web.Response(text="Kairos & Chrona are alive! ⚡️🌸")
-
-async def start_web_server():
-    port = int(os.getenv("PORT", 7863))
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    app.router.add_get("/health", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"🌐 Health-check веб-сервер слушает порт {port}")
-
-async def main():
-    print("🚀 Запуск экосистемы Telegram-ботов: Кайрос ⚡️ + Хрона 🌸")
-    await asyncio.gather(
-        start_web_server(),
-        start_kairos_task(),
-        start_chrona_task()
-    )
+def main():
+    print("🚀 Launching Kairos & Chrona via dedicated subprocesses...")
+    p1 = subprocess.Popen([sys.executable, "kairos_bot.py"], cwd=str(Path(__file__).resolve().parent))
+    p2 = subprocess.Popen([sys.executable, "chrona_bot.py"], cwd=str(Path(__file__).resolve().parent))
+    
+    try:
+        while True:
+            time.sleep(2)
+            if p1.poll() is not None:
+                print("Restarting Kairos...")
+                p1 = subprocess.Popen([sys.executable, "kairos_bot.py"], cwd=str(Path(__file__).resolve().parent))
+            if p2.poll() is not None:
+                print("Restarting Chrona...")
+                p2 = subprocess.Popen([sys.executable, "chrona_bot.py"], cwd=str(Path(__file__).resolve().parent))
+    except KeyboardInterrupt:
+        p1.terminate()
+        p2.terminate()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
