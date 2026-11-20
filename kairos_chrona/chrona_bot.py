@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.INFO)
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -181,16 +183,28 @@ async def on_user_message(message: types.Message, bot: Bot):
             user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]
 {message.text}"
             
-    chat_history = db.get_chat_history(message.chat.id, limit=10)
-    db.add_chat_message(message.chat.id, message.from_user.id, "user", user_prompt)
+    chat_history = []
+    try:
+        chat_history = db.get_chat_history(message.chat.id, limit=10)
+        db.add_chat_message(message.chat.id, message.from_user.id, "user", user_prompt)
+    except Exception as db_e:
+        print(f"DB error in chrona history: {db_e}")
 
-    reply = await llm.generate_chrona_reply_async(
-        user_message=user_prompt,
-        current_schedule=sched_summary,
-        projects_list=proj_summary,
-        history=chat_history
-    )
-    db.add_chat_message(message.chat.id, message.from_user.id, "assistant", reply)
+    try:
+        reply = await llm.generate_chrona_reply_async(
+            user_message=user_prompt,
+            current_schedule=sched_summary,
+            projects_list=proj_summary,
+            history=chat_history
+        )
+    except Exception as llm_e:
+        print(f"LLM error in chrona: {llm_e}")
+        reply = "Привет! Я рядышком и слежу за графиком 🌸"
+
+    try:
+        db.add_chat_message(message.chat.id, message.from_user.id, "assistant", reply)
+    except Exception:
+        pass
     try:
         formatted = markdown_to_telegram_html(reply)
         await message.answer(formatted, parse_mode="HTML")

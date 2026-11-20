@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.INFO)
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -193,17 +195,29 @@ async def on_user_message(message: types.Message, bot: Bot):
             user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]
 {message.text}"
             
-    chat_history = db.get_chat_history(message.chat.id, limit=10)
-    db.add_chat_message(message.chat.id, user_id, "user", user_prompt)
+    chat_history = []
+    try:
+        chat_history = db.get_chat_history(message.chat.id, limit=10)
+        db.add_chat_message(message.chat.id, user_id, "user", user_prompt)
+    except Exception as db_e:
+        print(f"DB error in kairos history: {db_e}")
 
-    reply = await llm.generate_kairos_reply_async(
-        user_message=user_prompt,
-        mode=mode,
-        project_context=project_context,
-        workload_info=workload,
-        history=chat_history
-    )
-    db.add_chat_message(message.chat.id, user_id, "assistant", reply)
+    try:
+        reply = await llm.generate_kairos_reply_async(
+            user_message=user_prompt,
+            mode=mode,
+            project_context=project_context,
+            workload_info=workload,
+            history=chat_history
+        )
+    except Exception as llm_e:
+        print(f"LLM error in kairos: {llm_e}")
+        reply = "Салют! Я на связи ⚡️ О чем думаешь?"
+
+    try:
+        db.add_chat_message(message.chat.id, user_id, "assistant", reply)
+    except Exception:
+        pass
     
     inline_kb = None
     if mode == "consulting":

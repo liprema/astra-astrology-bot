@@ -3,18 +3,33 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import asyncio
 import os
+import traceback
 from aiohttp import web
 from dotenv import load_dotenv
 
 load_dotenv()
 
 async def start_kairos():
-    import kairos_bot
-    await kairos_bot.main()
+    while True:
+        try:
+            print("⚡️ Starting Kairos bot...")
+            import kairos_bot
+            await kairos_bot.main()
+        except Exception as e:
+            print(f"❌ Kairos crashed: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(3)
 
 async def start_chrona():
-    import chrona_bot
-    await chrona_bot.main()
+    while True:
+        try:
+            print("🌸 Starting Chrona bot...")
+            import chrona_bot
+            await chrona_bot.main()
+        except Exception as e:
+            print(f"❌ Chrona crashed: {e}")
+            traceback.print_exc()
+            await asyncio.sleep(3)
 
 async def handle_ping(request):
     return web.Response(text="Kairos & Chrona are alive! ⚡️🌸")
@@ -28,7 +43,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Health-check веб-сервер слушает порт {port} для Render Free")
+    print(f"🌐 Health-check веб-сервер слушает порт {port}")
 
 async def main():
     print("🚀 Запуск экосистемы Telegram-ботов: Кайрос ⚡️ + Хрона 🌸")
