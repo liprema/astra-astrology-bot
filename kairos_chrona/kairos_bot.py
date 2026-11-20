@@ -34,38 +34,37 @@ def get_main_keyboard(user_id: int):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     db.set_user_mode(user_id, "steam_myth")
-    
     greeting = (
-        "Салют! Я **Кайрос** — твой партнёр по вайбкодингу и бизнес-эдвайзер. ⚡️\n\n"
-        "Мы работаем в связке с **Хроной** (она рулит расписанием и не даёт выгореть).\n\n"
+        "Салют! Я <b>Кайрос</b> — твой партнёр по вайбкодингу и бизнес-эдвайзер. ⚡️\n\n"
+        "Мы работаем в связке с <b>Хроной</b> (она рулит расписанием и не даёт выгореть).\n\n"
         "В чём я могу помочь прямо сейчас:\n"
-        "• 🏛 **Steam & Мифы** — лор Хроник Акаши, пантеоны богов, механики, вишлисты и страница игры.\n"
-        "• 🕹 **Яндекс.Игры** — быстрые концепты, удержание, монетизация и WebGL.\n"
-        "• 💡 **Бизнес-консалтинг** — разбор любых сторонних идей, MVP за выходные.\n"
-        "• 🚀 **Взять в работу** — превратим любую идею в отдельный рабочий режим и сразу поставим слот в расписание Хроне!\n\n"
+        "• 🏛 <b>Steam & Мифы</b> — лор Хроник Акаши, пантеоны богов, механики, вишлисты и страница игры.\n"
+        "• 🕹 <b>Яндекс.Игры</b> — быстрые концепты, удержание, монетизация и WebGL.\n"
+        "• 💡 <b>Бизнес-консалтинг</b> — разбор любых сторонних идей, MVP за выходные.\n"
+        "• 🚀 <b>Взять в работу</b> — превратим любую идею в отдельный рабочий режим и сразу поставим слот в расписание Хроне!\n\n"
         "Выбирай режим внизу или просто пиши, что на уме!"
     )
-    await message.answer(greeting, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
+    await message.answer(greeting, reply_markup=get_main_keyboard(user_id), parse_mode="HTML")
 
 @dp.message(F.text == "🏛 Steam: Мифология")
 async def mode_steam(message: types.Message):
     db.set_user_mode(message.from_user.id, "steam_myth")
-    await message.answer("Включил режим **🏛 Steam: Мифология & Путешествия души**.\nПогружаемся в Хроники Акаши, пантеоны богов и нарратив. О какой главе или механике думаем?")
+    await message.answer("Включил режим <b>🏛 Steam: Мифология & Путешествия души</b>.\nПогружаемся в Хроники Акаши, пантеоны богов и нарратив. О какой главе или механике думаем?", parse_mode="HTML")
 
 @dp.message(F.text == "🕹 Яндекс.Игры")
 async def mode_yandex(message: types.Message):
     db.set_user_mode(message.from_user.id, "yandex_games")
-    await message.answer("Переключил на режим **🕹 Яндекс.Игры**.\nФокус на быстрых циклах, высоком ретеншне и кликабельных механиках. Какую игру пилим или тестируем?")
+    await message.answer("Переключил на режим <b>🕹 Яндекс.Игры</b>.\nФокус на быстрых циклах, высоком ретеншне и кликабельных механиках. Какую игру пилим или тестируем?", parse_mode="HTML")
 
 @dp.message(F.text == "💡 Брейншторм / Бизнес")
 async def mode_consulting(message: types.Message):
     db.set_user_mode(message.from_user.id, "consulting")
-    await message.answer("Режим **💡 Бизнес-консалтинг** активен!\nНакидывай любые стартап-идеи или бизнес-гипотезы. Разберём ЦА, монетизацию, подводные камни. Если идея зайдёт — сразу возьмём в работу!")
+    await message.answer("Режим <b>💡 Бизнес-консалтинг</b> активен!\nНакидывай любые стартап-идеи или бизнес-гипотезы. Разберём ЦА, монетизацию, подводные камни. Если идея зайдёт — сразу возьмём в работу!", parse_mode="HTML")
 
 @dp.message(F.text == "⏳ Запрос к Хроне (Тайминги)")
 async def check_timings(message: types.Message):
     workload = bridge.get_workload_status_for_kairos("polina")
-    await message.answer(f"🕒 **Сводка от Хроны по твоему расписанию:**\n\n{workload}\n\nЯ учитываю это при планировании наших спринтов!")
+    await message.answer(f"🕒 <b>Сводка от Хроны по твоему расписанию:</b>\n\n{workload}\n\nЯ учитываю это при планировании наших спринтов!", parse_mode="HTML")
 
 @dp.message(F.text == "🚀 Проекты в работе")
 @dp.message(Command("projects"))
@@ -75,13 +74,13 @@ async def list_projects(message: types.Message):
         await message.answer("Пока нет активных кастомных проектов в работе. Обсудим идею в режиме 💡 Брейншторм и запустим?")
         return
 
-    text = "📁 **Твои активные проекты в работе:**\n\n"
+    text = "📁 <b>Твои активные проекты в работе:</b>\n\n"
     inline_kb = []
     for p in projects:
-        text += f"• **{p['title']}** (Дедлайн: {p['deadline'] or 'не задан'})\n  Статус: `{p['status']}`\n\n"
+        text += f"• <b>{p['title']}</b> (Дедлайн: {p['deadline'] or 'не задан'})\n  Статус: <code>{p['status']}</code>\n\n"
         inline_kb.append([InlineKeyboardButton(text=f"🎯 Фокус: {p['title']}", callback_data=f"select_proj_{p['id']}")])
 
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb), parse_mode="Markdown")
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("select_proj_"))
 async def on_project_selected(callback: types.CallbackQuery):
@@ -93,16 +92,15 @@ async def on_project_selected(callback: types.CallbackQuery):
 
     db.set_user_mode(callback.from_user.id, f"project_{proj_id}", active_project_id=proj_id)
     await callback.message.answer(
-        f"🎯 Режим переключен на проект: **{project['title']}**!\n"
-        f"Дедлайн: {project['deadline'] or 'гибкий'}\n"
-        f"Теперь я держу весь контекст этого бизнеса в фокусе. С чего начнём спринт?",
-        parse_mode="Markdown"
+        f"🎯 Переключил рабочий контекст на проект: <b>«{project['title']}»</b>!\n"
+        f"Все обсуждения и генерации теперь привязаны к нему.",
+        parse_mode="HTML"
     )
     await callback.answer()
 
+@dp.callback_query(F.data == "take_in_work_current")
 @dp.callback_query(F.data.startswith("take_in_work_"))
 async def on_take_in_work(callback: types.CallbackQuery):
-    # Быстрое создание проекта из идеи
     parts = callback.data.split("_")
     code = f"proj_{int(callback.message.date.timestamp())}"
     title = "Новая бизнес-инициатива"
@@ -115,25 +113,22 @@ async def on_take_in_work(callback: types.CallbackQuery):
         owner="polina"
     )
     db.set_user_mode(callback.from_user.id, f"project_{project_id}", active_project_id=project_id)
-    
-    # Синхронизация с Хроной!
     await bridge.notify_chrona_about_new_project(project_id, user_chat_id=callback.from_user.id)
     
     await callback.message.answer(
-        f"🚀 **Отлично, идея взята в работу!**\n\n"
+        f"🚀 <b>Отлично, идея взята в работу!</b>\n\n"
         f"Создан проект ID #{project_id}.\n"
         f"Хрона уже получила уведомление и запланировала майлстоуны в твоем расписании!\n"
-        f"Переименовать проект можно командой: `/rename <новое_имя>`.",
-        parse_mode="Markdown"
+        f"Переименовать проект можно командой: <code>/rename &lt;новое_имя&gt;</code>.",
+        parse_mode="HTML"
     )
     await callback.answer()
 
 @dp.message(Command("take"))
 async def cmd_take_project(message: types.Message):
-    """Взять конкретный проект: /take Название проекта"""
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("Укажи название проекта, например:\n`/take Сервис открыток со славянскими богами`", parse_mode="Markdown")
+        await message.answer("Укажи название проекта, например:\n<code>/take Сервис открыток со славянскими богами</code>", parse_mode="HTML")
         return
         
     title = args[1].strip()
@@ -147,14 +142,12 @@ async def cmd_take_project(message: types.Message):
         owner="polina"
     )
     db.set_user_mode(message.from_user.id, f"project_{project_id}", active_project_id=project_id)
-    
-    # Сигнал Хроне
     await bridge.notify_chrona_about_new_project(project_id, user_chat_id=message.from_user.id)
     
     await message.answer(
-        f"🚀 Проект **«{title}»** успешно запущен и взят в работу!\n"
+        f"🚀 Проект <b>«{title}»</b> успешно запущен и взят в работу!\n"
         f"Режим переключен. Хрона добавила контрольные точки в твой календарь.",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 @dp.message()
@@ -162,14 +155,10 @@ async def on_user_message(message: types.Message, bot: Bot):
     if not message.text:
         return
 
-    # В групповых чатах проверяем координацию с Хроной, чтобы не дублировать ответы
+    # В групповых чатах проверяем координацию с Хроной
     if message.chat.type in ("group", "supergroup"):
         bot_info = await bot.get_me()
         if not should_bot_handle_message(message.text, bot_name="kairos", bot_username=bot_info.username):
-            return
-        
-        # Атомарный захват сообщения в БД: если Хрона уже ответила/отвечает, Кайрос молчит
-        # claim disabled
             return
 
     user_id = message.from_user.id
@@ -182,9 +171,12 @@ async def on_user_message(message: types.Message, bot: Bot):
         if proj:
             project_context = f"Название: {proj['title']}\nОписание: {proj['description']}\nДедлайн: {proj['deadline']}"
 
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    try:
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    except Exception:
+        pass
+
     workload = bridge.get_workload_status_for_kairos("polina")
-    
     reply = await llm.generate_kairos_reply_async(
         user_message=message.text,
         mode=mode,
@@ -198,7 +190,10 @@ async def on_user_message(message: types.Message, bot: Bot):
             [InlineKeyboardButton(text="🚀 Взять эту идею в работу!", callback_data="take_in_work_current")]
         ])
     
-    await message.answer(reply, reply_markup=inline_kb)
+    try:
+        await message.answer(reply, reply_markup=inline_kb, parse_mode="HTML")
+    except Exception:
+        await message.answer(reply, reply_markup=inline_kb)
 
 async def main():
     if not KAIROS_TOKEN:
