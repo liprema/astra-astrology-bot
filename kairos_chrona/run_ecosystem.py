@@ -130,13 +130,13 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
 
     models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
     if GEMINI_KEY:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
             for m in models:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                 payload = {
                     "systemInstruction": {"parts": [{"text": full_sys}]},
                     "contents": contents,
-                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
                 }
                 try:
                     resp = await client.post(url, json=payload)
@@ -162,11 +162,11 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                 messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_message})
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                    json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 2048}
+                    json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 4096}
                 )
                 if resp.status_code == 200:
                     ch = resp.json().get("choices", [])
@@ -183,7 +183,7 @@ dp_chrona = Dispatcher()
 # Helper for sending replies cleanly (matching Astra's safe splitter)
 async def send_response(message: types.Message, text: str):
     try:
-        parts = split_html_telegram_message(markdown_to_telegram_html(text))
+        parts = split_html_telegram_message(text)
         for part in parts:
             try:
                 await message.reply(part, parse_mode=ParseMode.HTML)
@@ -194,16 +194,32 @@ async def send_response(message: types.Message, text: str):
         logger.error("send_response outer error: %s\n%s", e, traceback.format_exc())
         await message.reply(strip_html_tags(text)[:4000])
 
-# Regex matching any mention of Kairos or Chrona with any declensions/username
+# Robust wake word detection:
+# Supports Cyrillic / Latin mix (Kайрос where K is English), all declensions, and usernames
+KAIROS_WAKE_REGEX = re.compile(
+    r"(?:^|[^\w])([кk][аa][йy][рp][оo][сc][а-яёa-z]*|your_kairos_bot)(?:$|[^\w])",
+    re.I | re.U
+)
+
+CHRONA_WAKE_REGEX = re.compile(
+    r"(?:^|[^\w])([хx][рp][оo][нn][аa-яёa-z]*|your_chrona_bot)(?:$|[^\w])",
+    re.I | re.U
+)
+
+OTHER_BOTS_REGEX = re.compile(
+    r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix)",
+    re.I | re.U
+)
+
 def is_kairos_wake(text: str) -> bool:
     if not text:
         return False
-    return bool(re.search(r"(?:^|[^\w])(кайрос[а-яё]*|kairos|your_kairos_bot)(?:$|[^\w])", text, re.I))
+    return bool(KAIROS_WAKE_REGEX.search(text))
 
 def is_chrona_wake(text: str) -> bool:
     if not text:
         return False
-    return bool(re.search(r"(?:^|[^\w])(хрон[а-яё]+|chrona|your_chrona_bot)(?:$|[^\w])", text, re.I))
+    return bool(CHRONA_WAKE_REGEX.search(text))
 
 # --- Kairos ---
 @dp_kairos.message(Command("start", "help"))
@@ -231,15 +247,17 @@ async def kairos_msg(message: types.Message, bot: Bot):
 
         has_wake = is_kairos_wake(text)
         is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-        mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|хрон[а-яё]+|chrona)", text, re.I))
+        mentions_other = bool(OTHER_BOTS_REGEX.search(text) or is_chrona_wake(text))
 
-        if not is_private:
+        if is_private:
+            should_respond = True
+        else:
             if mentions_other and not has_wake and not is_reply_to_me:
                 return
-            if not (has_wake or is_reply_to_me):
-                kw = ["steam", "стим", "акаш", "миф", "бог", "лор", "яндекс", "игры", "игра", "геймдев", "бизнес", "код", "вайбкодинг", "ии", "нейросет"]
-                if not any(k in text.lower() for k in kw):
-                    return
+            should_respond = has_wake or is_reply_to_me
+
+        if not should_respond:
+            return
 
         user_prompt = text
         if message.reply_to_message:
@@ -282,15 +300,17 @@ async def chrona_msg(message: types.Message, bot: Bot):
 
         has_wake = is_chrona_wake(text)
         is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
-        mentions_other = bool(re.search(r"(?:астр[а-яё]+|astra|аркан[а-яё]+|arcana|матрикс[а-яё]*|matrix|кайрос[а-яё]*|kairos)", text, re.I))
+        mentions_other = bool(OTHER_BOTS_REGEX.search(text) or is_kairos_wake(text))
 
-        if not is_private:
+        if is_private:
+            should_respond = True
+        else:
             if mentions_other and not has_wake and not is_reply_to_me:
                 return
-            if not (has_wake or is_reply_to_me):
-                kw = ["расписани", "дедлайн", "учеб", "зачет", "зачёт", "экзамен", "сесси", "пара", "пары", "календар", "тайминг", "план"]
-                if not any(k in text.lower() for k in kw):
-                    return
+            should_respond = has_wake or is_reply_to_me
+
+        if not should_respond:
+            return
 
         user_prompt = text
         if message.reply_to_message:
