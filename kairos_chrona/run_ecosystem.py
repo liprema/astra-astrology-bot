@@ -45,7 +45,42 @@ class DialogStore:
                 created_at REAL NOT NULL
             )
             """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_sessions (
+                bot_name TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                last_active REAL NOT NULL,
+                PRIMARY KEY (bot_name, chat_id, user_id)
+            )
+            """)
             conn.commit()
+
+    def mark_active(self, bot_name: str, chat_id: int, user_id: int):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                INSERT INTO active_sessions (bot_name, chat_id, user_id, last_active)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(bot_name, chat_id, user_id) DO UPDATE SET last_active = excluded.last_active
+                """, (bot_name, chat_id, user_id, time.time()))
+                conn.commit()
+        except Exception as e:
+            logger.error("mark_active error: %s", e)
+
+    def is_recently_active(self, bot_name: str, chat_id: int, user_id: int, ttl_seconds: int = 600) -> bool:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    "SELECT last_active FROM active_sessions WHERE bot_name = ? AND chat_id = ? AND user_id = ?",
+                    (bot_name, chat_id, user_id)
+                )
+                row = cur.fetchone()
+                if row:
+                    return (time.time() - float(row[0])) < ttl_seconds
+        except Exception as e:
+            logger.error("is_recently_active error: %s", e)
+        return False
 
     def add_message(self, bot_name: str, chat_id: int, user_id: int, role: str, content: str):
         try:
@@ -57,7 +92,7 @@ class DialogStore:
         except Exception as e:
             logger.error("DialogStore add_message error: %s", e)
 
-    def get_history(self, bot_name: str, chat_id: int, limit: int = 10) -> List[Dict[str, str]]:
+    def get_history(self, bot_name: str, chat_id: int, limit: int = 12) -> List[Dict[str, str]]:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cur = conn.execute(
@@ -113,27 +148,24 @@ CHRONA_SYSTEM = """Ты — ХРОНА (Chrona). Тебе 25 лет. Ты хра
 - На дружеский трёп («привет», «как дела?»): отвечай КРАТКО (1-3 фразы), душевно.
 - На профессиональные вопросы по расписанию, дедлайнам, планированию, сессии: расписывай ВСЁ СУПЕР-ПОДРОБНО: по дням, слотам и приоритетам!"""
 
-async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_message: str) -> str:
+async def call_llm(bot_name: str, system_prompt: str, history: List[Dict[str, str]], user_message: str) -> str:
     full_sys = f"{get_current_date_banner()}\n\n{system_prompt}"
     
-    # Format contents with strict alternating user/model turns
-    contents = []
-    last_role = None
-    for h in history[-6:]:
-        role = "user" if h.get("role") == "user" else "model"
-        txt = (h.get("content") or "").strip()
-        if not txt:
-            continue
-        if role == last_role:
-            contents[-1]["parts"][0]["text"] += f"\n\n{txt}"
-        else:
-            contents.append({"role": role, "parts": [{"text": txt}]})
-            last_role = role
-    
-    if last_role == "user":
-        contents[-1]["parts"][0]["text"] += f"\n\n{user_message}"
-    else:
-        contents.append({"role": "user", "parts": [{"text": user_message}]})
+    # 100% Astra-identical single-turn prompt with dialogue memory block:
+    # Completely avoids any multi-turn role mismatch errors or API 400 Bad Request
+    history_block = ""
+    if history:
+        turns = []
+        name_lbl = "Кайрос" if bot_name == "kairos" else "Хрона"
+        for h in history[-10:]:
+            r = "Полина" if h.get("role") == "user" else name_lbl
+            c = (h.get("content") or "").strip()
+            if c:
+                turns.append(f"{r}: {c[:900]}")
+        if turns:
+            history_block = f"ИСТОРИЯ ВАШЕГО ДИАЛОГА (ПОМНИ ВСЁ, О ЧЁМ ГОВОРИЛИ):\n" + "\n".join(turns) + "\n\n"
+
+    full_user_prompt = f"{history_block}НОВОЕ СООБЩЕНИЕ ОТ ПОЛИНЫ:\n{user_message}"
 
     models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
     if GEMINI_KEY:
@@ -143,7 +175,7 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                     payload = {
                         "systemInstruction": {"parts": [{"text": full_sys}]},
-                        "contents": contents,
+                        "contents": [{"role": "user", "parts": [{"text": full_user_prompt}]}],
                         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
                     }
                     try:
@@ -158,7 +190,7 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                                 if tp:
                                     return "\n".join(tp).strip()
                         else:
-                            logger.warning("Gemini %s returned status %d: %s", m, resp.status_code, resp.text[:100])
+                            logger.warning("Gemini %s status %d: %s", m, resp.status_code, resp.text[:100])
                     except Exception as e:
                         logger.warning("Gemini %s request exception: %s", m, e)
                         continue
@@ -166,19 +198,20 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
             logger.error("httpx outer error in Gemini: %s", e)
 
     if GROQ_KEY:
-        messages = [{"role": "system", "content": full_sys}]
-        for h in history[-6:]:
-            r = "user" if h.get("role") == "user" else "assistant"
-            c = (h.get("content") or "").strip()
-            if c:
-                messages.append({"role": r, "content": c})
-        messages.append({"role": "user", "content": user_message})
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-                    json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7, "max_tokens": 4096}
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": full_sys},
+                            {"role": "user", "content": full_user_prompt}
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 4096
+                    }
                 )
                 if resp.status_code == 200:
                     ch = resp.json().get("choices", [])
@@ -265,16 +298,22 @@ async def kairos_msg(message: types.Message, bot: Bot):
         has_wake = is_kairos_wake(text)
         is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
         mentions_other = bool(OTHER_BOTS_REGEX.search(text) or is_chrona_wake(text))
+        
+        # In groups: continue dialogue seamlessly if active in the last 10 minutes without repeating name!
+        is_active_dialog = (not is_private) and store.is_recently_active("kairos", chat_id, user_id, ttl_seconds=600)
 
+        # In private chat: ALWAYS 100% RESPOND TO EVERY SINGLE MESSAGE!
         if is_private:
             should_respond = True
         else:
             if mentions_other and not has_wake and not is_reply_to_me:
                 return
-            should_respond = has_wake or is_reply_to_me
+            should_respond = has_wake or is_reply_to_me or is_active_dialog
 
         if not should_respond:
             return
+
+        store.mark_active("kairos", chat_id, user_id)
 
         user_prompt = text
         if message.reply_to_message:
@@ -284,14 +323,14 @@ async def kairos_msg(message: types.Message, bot: Bot):
                 user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
 
         history = store.get_history("kairos", chat_id)
-        store.add_message("kairos", chat_id, user_id, "user", user_prompt)
         
         try:
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         except Exception:
             pass
 
-        reply = await call_llm(KAIROS_SYSTEM, history, user_prompt)
+        reply = await call_llm("kairos", KAIROS_SYSTEM, history, user_prompt)
+        store.add_message("kairos", chat_id, user_id, "user", user_prompt)
         store.add_message("kairos", chat_id, user_id, "assistant", reply)
         await send_response(message, reply)
     except Exception as e:
@@ -323,15 +362,21 @@ async def chrona_msg(message: types.Message, bot: Bot):
         is_reply_to_me = bool(message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot.id)
         mentions_other = bool(OTHER_BOTS_REGEX.search(text) or is_kairos_wake(text))
 
+        # In groups: continue dialogue seamlessly if active in the last 10 minutes without repeating name!
+        is_active_dialog = (not is_private) and store.is_recently_active("chrona", chat_id, user_id, ttl_seconds=600)
+
+        # In private chat: ALWAYS 100% RESPOND TO EVERY SINGLE MESSAGE!
         if is_private:
             should_respond = True
         else:
             if mentions_other and not has_wake and not is_reply_to_me:
                 return
-            should_respond = has_wake or is_reply_to_me
+            should_respond = has_wake or is_reply_to_me or is_active_dialog
 
         if not should_respond:
             return
+
+        store.mark_active("chrona", chat_id, user_id)
 
         user_prompt = text
         if message.reply_to_message:
@@ -341,14 +386,14 @@ async def chrona_msg(message: types.Message, bot: Bot):
                 user_prompt = f"[В ответ на {r_auth}: «{r_txt[:300]}»]\n{text}"
 
         history = store.get_history("chrona", chat_id)
-        store.add_message("chrona", chat_id, user_id, "user", user_prompt)
         
         try:
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         except Exception:
             pass
 
-        reply = await call_llm(CHRONA_SYSTEM, history, user_prompt)
+        reply = await call_llm("chrona", CHRONA_SYSTEM, history, user_prompt)
+        store.add_message("chrona", chat_id, user_id, "user", user_prompt)
         store.add_message("chrona", chat_id, user_id, "assistant", reply)
         await send_response(message, reply)
     except Exception as e:
