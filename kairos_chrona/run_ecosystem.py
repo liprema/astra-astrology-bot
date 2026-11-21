@@ -167,10 +167,10 @@ async def call_llm(bot_name: str, system_prompt: str, history: List[Dict[str, st
 
     full_user_prompt = f"{history_block}НОВОЕ СООБЩЕНИЕ ОТ ПОЛИНЫ:\n{user_message}"
 
-    models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
+    models = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
     if GEMINI_KEY:
         try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 for m in models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                     payload = {
@@ -199,7 +199,7 @@ async def call_llm(bot_name: str, system_prompt: str, history: List[Dict[str, st
 
     if GROQ_KEY:
         try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
