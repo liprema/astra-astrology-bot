@@ -130,7 +130,7 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
 
     models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
     if GEMINI_KEY:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             for m in models:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                 payload = {
@@ -162,7 +162,7 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                 messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_message})
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
+            async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
@@ -341,16 +341,33 @@ async def start_web():
     logger.info("Web server listening on port %d", port)
     return runner
 
+async def run_kairos():
+    bot = Bot(token=KAIROS_TOKEN)
+    logger.info("Starting Kairos polling...")
+    while True:
+        try:
+            await dp_kairos.start_polling(bot, allowed_updates=["message"])
+        except Exception as e:
+            logger.error("Kairos polling error: %s", e)
+            await asyncio.sleep(2)
+
+async def run_chrona():
+    bot = Bot(token=CHRONA_TOKEN)
+    logger.info("Starting Chrona polling...")
+    while True:
+        try:
+            await dp_chrona.start_polling(bot, allowed_updates=["message"])
+        except Exception as e:
+            logger.error("Chrona polling error: %s", e)
+            await asyncio.sleep(2)
+
 async def main():
     runner = await start_web()
-    bot_k = Bot(token=KAIROS_TOKEN)
-    bot_c = Bot(token=CHRONA_TOKEN)
-    
-    logger.info("Starting Kairos & Chrona polling...")
+    logger.info("Starting Kairos & Chrona independent polling loops...")
     try:
         await asyncio.gather(
-            dp_kairos.start_polling(bot_k, allowed_updates=["message"]),
-            dp_chrona.start_polling(bot_c, allowed_updates=["message"])
+            run_kairos(),
+            run_chrona()
         )
     finally:
         await runner.cleanup()
