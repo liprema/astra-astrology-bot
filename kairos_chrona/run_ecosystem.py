@@ -48,21 +48,28 @@ class DialogStore:
             conn.commit()
 
     def add_message(self, bot_name: str, chat_id: int, user_id: int, role: str, content: str):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO messages (bot_name, chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (bot_name, chat_id, user_id, role, content, time.time())
-            )
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT INTO messages (bot_name, chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (bot_name, chat_id, user_id, role, content, time.time())
+                )
+        except Exception as e:
+            logger.error("DialogStore add_message error: %s", e)
 
     def get_history(self, bot_name: str, chat_id: int, limit: int = 10) -> List[Dict[str, str]]:
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(
-                "SELECT role, content FROM messages WHERE bot_name = ? AND chat_id = ? ORDER BY id DESC LIMIT ?",
-                (bot_name, chat_id, limit)
-            )
-            rows = cur.fetchall()
-        rows.reverse()
-        return [{"role": r[0], "content": r[1]} for r in rows]
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    "SELECT role, content FROM messages WHERE bot_name = ? AND chat_id = ? ORDER BY id DESC LIMIT ?",
+                    (bot_name, chat_id, limit)
+                )
+                rows = cur.fetchall()
+            rows.reverse()
+            return [{"role": r[0], "content": r[1]} for r in rows]
+        except Exception as e:
+            logger.error("DialogStore get_history error: %s", e)
+            return []
 
 store = DialogStore(DB_PATH)
 
@@ -130,28 +137,33 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
 
     models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"]
     if GEMINI_KEY:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for m in models:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
-                payload = {
-                    "systemInstruction": {"parts": [{"text": full_sys}]},
-                    "contents": contents,
-                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
-                }
-                try:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        cand = resp.json().get("candidates", [])
-                        if cand:
-                            parts = cand[0].get("content", {}).get("parts", [])
-                            tp = [p["text"] for p in parts if "text" in p and not p.get("thought")]
-                            if not tp:
-                                tp = [p["text"] for p in parts if "text" in p]
-                            if tp:
-                                return "\n".join(tp).strip()
-                except Exception as e:
-                    logger.warning("Gemini model %s error: %s", m, e)
-                    continue
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                for m in models:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
+                    payload = {
+                        "systemInstruction": {"parts": [{"text": full_sys}]},
+                        "contents": contents,
+                        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096}
+                    }
+                    try:
+                        resp = await client.post(url, json=payload)
+                        if resp.status_code == 200:
+                            cand = resp.json().get("candidates", [])
+                            if cand:
+                                parts = cand[0].get("content", {}).get("parts", [])
+                                tp = [p["text"] for p in parts if "text" in p and not p.get("thought")]
+                                if not tp:
+                                    tp = [p["text"] for p in parts if "text" in p]
+                                if tp:
+                                    return "\n".join(tp).strip()
+                        else:
+                            logger.warning("Gemini %s returned status %d: %s", m, resp.status_code, resp.text[:100])
+                    except Exception as e:
+                        logger.warning("Gemini %s request exception: %s", m, e)
+                        continue
+        except Exception as e:
+            logger.error("httpx outer error in Gemini: %s", e)
 
     if GROQ_KEY:
         messages = [{"role": "system", "content": full_sys}]
@@ -162,7 +174,7 @@ async def call_llm(system_prompt: str, history: List[Dict[str, str]], user_messa
                 messages.append({"role": r, "content": c})
         messages.append({"role": "user", "content": user_message})
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=25.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
@@ -189,13 +201,18 @@ async def send_response(message: types.Message, text: str):
                 await message.reply(part, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.warning("HTML reply failed, retrying plain text: %s", e)
-                await message.reply(strip_html_tags(part))
+                try:
+                    await message.reply(strip_html_tags(part))
+                except Exception:
+                    await message.answer(strip_html_tags(part))
     except Exception as e:
         logger.error("send_response outer error: %s\n%s", e, traceback.format_exc())
-        await message.reply(strip_html_tags(text)[:4000])
+        try:
+            await message.answer(strip_html_tags(text)[:4000])
+        except Exception:
+            pass
 
 # Robust wake word detection:
-# Supports Cyrillic / Latin mix (Kайрос where K is English), all declensions, and usernames
 KAIROS_WAKE_REGEX = re.compile(
     r"(?:^|[^\w])([кk][аa][йy][рp][оo][сc][а-яёa-z]*|your_kairos_bot)(?:$|[^\w])",
     re.I | re.U
@@ -268,7 +285,11 @@ async def kairos_msg(message: types.Message, bot: Bot):
 
         history = store.get_history("kairos", chat_id)
         store.add_message("kairos", chat_id, user_id, "user", user_prompt)
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
 
         reply = await call_llm(KAIROS_SYSTEM, history, user_prompt)
         store.add_message("kairos", chat_id, user_id, "assistant", reply)
@@ -321,7 +342,11 @@ async def chrona_msg(message: types.Message, bot: Bot):
 
         history = store.get_history("chrona", chat_id)
         store.add_message("chrona", chat_id, user_id, "user", user_prompt)
-        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
 
         reply = await call_llm(CHRONA_SYSTEM, history, user_prompt)
         store.add_message("chrona", chat_id, user_id, "assistant", reply)
