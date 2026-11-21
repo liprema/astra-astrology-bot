@@ -235,10 +235,10 @@ async def kairos_start(message: types.Message):
     )
     await send_response(message, greeting)
 
-@dp_kairos.message(F.text)
+@dp_kairos.message()
 async def kairos_msg(message: types.Message, bot: Bot):
     try:
-        text = (message.text or "").strip()
+        text = (message.text or message.caption or "").strip()
         if not text:
             return
         chat_id = message.chat.id
@@ -288,10 +288,10 @@ async def chrona_start(message: types.Message):
     )
     await send_response(message, greeting)
 
-@dp_chrona.message(F.text)
+@dp_chrona.message()
 async def chrona_msg(message: types.Message, bot: Bot):
     try:
-        text = (message.text or "").strip()
+        text = (message.text or message.caption or "").strip()
         if not text:
             return
         chat_id = message.chat.id
@@ -346,7 +346,7 @@ async def run_kairos():
     logger.info("Starting Kairos polling...")
     while True:
         try:
-            await dp_kairos.start_polling(bot, allowed_updates=["message"])
+            await dp_kairos.start_polling(bot, allowed_updates=dp_kairos.resolve_used_update_types())
         except Exception as e:
             logger.error("Kairos polling error: %s", e)
             await asyncio.sleep(2)
@@ -356,7 +356,7 @@ async def run_chrona():
     logger.info("Starting Chrona polling...")
     while True:
         try:
-            await dp_chrona.start_polling(bot, allowed_updates=["message"])
+            await dp_chrona.start_polling(bot, allowed_updates=dp_chrona.resolve_used_update_types())
         except Exception as e:
             logger.error("Chrona polling error: %s", e)
             await asyncio.sleep(2)
