@@ -65,11 +65,7 @@ class LLMService:
             for model_name in models_to_try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_key}"
                 payload = {
-                    "systemInstruction": {"parts": [{"text": f"{get_live_calendar_banner()}
-
-{system_prompt}
-
-{HTML_STYLE_INSTRUCTION}"}]},
+                    "systemInstruction": {"parts": [{"text": f"{get_live_calendar_banner()}\n\n{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"}]},
                     "contents": contents,
                     "generationConfig": {
                         "temperature": 0.7,
@@ -87,8 +83,7 @@ class LLMService:
                             if not text_parts:
                                 text_parts = [p["text"] for p in parts if "text" in p]
                             if text_parts:
-                                return "
-".join(text_parts)
+                                return "\n".join(text_parts)
                 except Exception:
                     continue
         return None
@@ -101,11 +96,7 @@ class LLMService:
             "Authorization": f"Bearer {self.groq_key}",
             "Content-Type": "application/json"
         }
-        messages = [{"role": "system", "content": f"{get_live_calendar_banner()}
-
-{system_prompt}
-
-{HTML_STYLE_INSTRUCTION}"}]
+        messages = [{"role": "system", "content": f"{get_live_calendar_banner()}\n\n{system_prompt}\n\n{HTML_STYLE_INSTRUCTION}"}]
         if history:
             for h in history:
                 r = "user" if h.get("role") == "user" else "assistant"
@@ -175,9 +166,7 @@ class LLMService:
 - Если просто болтаем: отвечай КОРОТКО (1-3 живые фразы), без духоты.
 - Если просят сделать ПРОФЕССИОНАЛЬНЫЙ РАЗБОР (идею игры, лор богов, механику для Яндекс.Игр, разбор вишлистов Steam, монетизацию, сюжетный поворот, код): выкладывайся НА МАКСИМУМ — пиши СУПЕР-ПОДРОБНО, с крутыми идеями, по пунктам, с примерами, но простыми и понятными словами!
 """
-        workload_context = f"
-[Нагрузка от Хроны]: {workload_info}
-" if workload_info else ""
+        workload_context = f"\n[Нагрузка от Хроны]: {workload_info}\n" if workload_info else ""
         if mode == "steam_myth":
             mode_desc = "ФОКУС: 🏛 Steam (Хроники Акаши, пантеоны богов, сюжет, квесты, удержание игроков, оформление страницы)."
         elif mode == "yandex_games":
@@ -189,6 +178,4 @@ class LLMService:
         else:
             mode_desc = "ФОКУС: Дружеский разговор, вайбкодинг."
 
-        return f"{base_personality}
-{mode_desc}
-{workload_context}"
+        return f"{base_personality}\n{mode_desc}\n{workload_context}"

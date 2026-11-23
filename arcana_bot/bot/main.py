@@ -494,7 +494,15 @@ async def main() -> None:
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     logger.info("Starting Arcana Tarot Telegram Bot polling...")
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        while True:
+            try:
+                await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Arcana polling error, retrying in 3s: %s", exc)
+                await asyncio.sleep(3)
     finally:
         await runner.cleanup()
 

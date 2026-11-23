@@ -108,8 +108,8 @@ class DialogStore:
 
 store = DialogStore(DB_PATH)
 
-KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN", "9020108761:AAHHo0otC9UDgC9DQlSTKSG6uyh2R_PEC10").strip()
-CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "9079738210:AAHZCtzs0ApWQ3rkAkvO-A7gtazdbkHBWjY").strip()
+KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN", "").strip()
+CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "").strip()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
@@ -170,7 +170,7 @@ async def call_llm(bot_name: str, system_prompt: str, history: List[Dict[str, st
     models = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
     if GEMINI_KEY:
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=25.0) as client:
                 for m in models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                     payload = {
@@ -199,7 +199,7 @@ async def call_llm(bot_name: str, system_prompt: str, history: List[Dict[str, st
 
     if GROQ_KEY:
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=25.0) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
@@ -412,24 +412,38 @@ async def start_web():
     return runner
 
 async def run_kairos():
+    if not KAIROS_TOKEN:
+        logger.warning("KAIROS_BOT_TOKEN is not set! Kairos polling skipped.")
+        while True:
+            await asyncio.sleep(3600)
     bot = Bot(token=KAIROS_TOKEN)
     logger.info("Starting Kairos polling...")
     while True:
         try:
             await dp_kairos.start_polling(bot, allowed_updates=dp_kairos.resolve_used_update_types())
+            break
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("Kairos polling error: %s", e)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
 async def run_chrona():
+    if not CHRONA_TOKEN:
+        logger.warning("CHRONA_BOT_TOKEN is not set! Chrona polling skipped.")
+        while True:
+            await asyncio.sleep(3600)
     bot = Bot(token=CHRONA_TOKEN)
     logger.info("Starting Chrona polling...")
     while True:
         try:
             await dp_chrona.start_polling(bot, allowed_updates=dp_chrona.resolve_used_update_types())
+            break
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("Chrona polling error: %s", e)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
 async def main():
     runner = await start_web()

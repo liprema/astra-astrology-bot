@@ -20,8 +20,8 @@ from shared_bridge import BridgeService, should_bot_handle_message
 
 load_dotenv()
 
-KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN", "9020108761:AAHHo0otC9UDgC9DQlSTKSG6uyh2R_PEC10")
-CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "9079738210:AAHZCtzs0ApWQ3rkAkvO-A7gtazdbkHBWjY")
+KAIROS_TOKEN = os.getenv("KAIROS_BOT_TOKEN", "")
+CHRONA_TOKEN = os.getenv("CHRONA_BOT_TOKEN", "")
 DB_PATH = os.getenv("DB_PATH", str(Path(__file__).resolve().parent / "data" / "ecosystem.db"))
 
 db = EcosystemDB(DB_PATH)
@@ -192,8 +192,7 @@ async def on_user_message(message: types.Message, bot: Bot):
         r_text = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
         r_author = message.reply_to_message.from_user.first_name if message.reply_to_message.from_user else "собеседник"
         if r_text:
-            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]
-{message.text}"
+            user_prompt = f"[В ответ на сообщение от {r_author}: «{r_text[:400]}»]\n{message.text}"
             
     chat_history = []
     try:
